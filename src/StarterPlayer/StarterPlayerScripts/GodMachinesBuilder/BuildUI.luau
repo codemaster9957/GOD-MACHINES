@@ -309,7 +309,7 @@ function BuildUI.new(playerGui, callbacks)
 	hintText.TextColor3 = COLORS.Amber
 	self.Hint = hint
 
-	local root = Instance.new("Frame")
+	local root = Instance.new("CanvasGroup")
 	root.Name = "WorkshopRoot"
 	root.Size = UDim2.fromScale(1, 1)
 	root.BackgroundTransparency = 1
