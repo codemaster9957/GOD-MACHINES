@@ -54,7 +54,7 @@ end
 
 function BuildUI.new(playerGui,callbacks)
 	local self=setmetatable({},BuildUI)
-	self.Callbacks=callbacks or {}; self.Catalog={}; self.Categories={}; self.InventoryButtons={}; self.HotbarButtons={}; self.HotbarIds={}; self.Favorites={}; self.Blueprints={}
+	self.Callbacks=callbacks or {}; self.Catalog={}; self.Categories={}; self.InventoryButtons={}; self.InventoryCounts={}; self.HotbarButtons={}; self.HotbarIds={}; self.Favorites={}; self.Blueprints={}
 	self.SelectedPart=nil; self.SelectedCategory="ALL"; self.SearchText=""; self.PaintRegion="All"; self.PaintColor=Color3.fromRGB(214,218,222); self.MaterialIndex=1; self.BindingIndex=1; self.NodeVisible=true; self.Mirrored=false
 
 	local gui=Instance.new("ScreenGui"); gui.Name="GodMachinesBuildUI"; gui.ResetOnSpawn=false; gui.IgnoreGuiInset=true; gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; gui.DisplayOrder=20; gui.Parent=playerGui; self.Gui=gui
@@ -144,8 +144,11 @@ function BuildUI:_refreshCategories()
 end
 function BuildUI:_refreshHotbar()
 	clearGuiChildren(self.Hotbar); self.HotbarButtons={}
-	for slot=1,9 do local partId=self.HotbarIds[slot]; local part=nil; if partId then for _,candidate in ipairs(self.Catalog) do if candidate.Id==partId then part=candidate; break end end end
-		local text="["..slot.."]"; if part then text..=" "..string.upper(part.ShortName or part.DisplayName or part.Id) end
+	for slot=1,9 do
+		local partId=self.HotbarIds[slot]; local part=nil
+		if partId then for _,candidate in ipairs(self.Catalog) do if candidate.Id==partId then part=candidate; break end end end
+		local text="["..slot.."]"
+		if part then text..=" "..string.upper(part.ShortName or part.DisplayName or part.Id).."\n×"..tostring(math.max(0,math.floor(tonumber(self.InventoryCounts[part.Id]) or 0))) end
 		local item=button(self.Hotbar,text,72); item.Size=UDim2.fromOffset(72,48); item.TextSize=9; item.TextWrapped=true; item:SetAttribute("Selected",part~=nil and part.Id==self.SelectedPart); applyButtonVisual(item)
 		if part then item.MouseButton1Click:Connect(function() if self.Callbacks.SelectPart then self.Callbacks.SelectPart(part.Id) end end); self.HotbarButtons[part.Id]=item end
 	end
@@ -158,10 +161,11 @@ end
 function BuildUI:_refreshCatalog()
 	clearGuiChildren(self.PartList); self.InventoryButtons={}
 	for _,part in ipairs(self.Catalog) do if not self:_visiblePart(part) then continue end
+		local ready=math.max(0,math.floor(tonumber(self.InventoryCounts[part.Id]) or 0))
 		local row=Instance.new("Frame"); row.Size=UDim2.new(1,-5,0,62); row.BackgroundColor3=if part.Id==self.SelectedPart then COLORS.AccentSoft else COLORS.Panel2; row.Parent=self.PartList; corner(row,6); stroke(row,.5)
 		local main=Instance.new("TextButton"); main.Size=UDim2.new(1,-46,1,0); main.BackgroundTransparency=1; main.Text=""; main.Parent=row; main.MouseButton1Click:Connect(function() if self.Callbacks.SelectPart then self.Callbacks.SelectPart(part.Id) end end)
 		local name=label(row,string.upper(part.DisplayName),11,true); name.Position=UDim2.fromOffset(10,7); name.Size=UDim2.new(1,-58,0,18); name.TextColor3=if part.Id==self.SelectedPart then COLORS.Accent else COLORS.Text
-		local meta=label(row,string.upper(part.Category).."  •  "..tostring(math.floor(part.Mass or 0)).." KG",9,false); meta.Position=UDim2.fromOffset(10,26); meta.Size=UDim2.new(1,-58,0,14); meta.TextColor3=COLORS.Muted
+		local meta=label(row,string.upper(part.Category).."  •  "..tostring(math.floor(part.Mass or 0)).." KG  •  "..tostring(ready).." READY",9,false); meta.Position=UDim2.fromOffset(10,26); meta.Size=UDim2.new(1,-58,0,14); meta.TextColor3=if ready>0 then COLORS.Good else COLORS.Bad
 		local desc=label(row,tostring(part.Description or ""),9,false); desc.Position=UDim2.fromOffset(10,42); desc.Size=UDim2.new(1,-58,0,13); desc.TextColor3=COLORS.Muted; desc.TextTruncate=Enum.TextTruncate.AtEnd
 		local star=Instance.new("TextButton"); star.AnchorPoint=Vector2.new(1,.5); star.Position=UDim2.new(1,-7,.5,0); star.Size=UDim2.fromOffset(34,34); star.BackgroundColor3=COLORS.Panel3; star.Text=if self.Favorites[part.Id] then "★" else "☆"; star.TextColor3=if self.Favorites[part.Id] then COLORS.Accent else COLORS.Muted; star.TextSize=18; star.Font=Enum.Font.GothamBold; star.Parent=row; corner(star,5); star.MouseButton1Click:Connect(function() self:_toggleFavorite(part.Id) end); self.InventoryButtons[part.Id]=row
 	end
@@ -171,11 +175,15 @@ function BuildUI:SetCatalog(parts,categories)
 	for _,part in ipairs(self.Catalog) do if #self.HotbarIds>=9 then break end; if not usedCategory[part.Category] then usedCategory[part.Category]=true; self.Favorites[part.Id]=true; table.insert(self.HotbarIds,part.Id) end end
 	self:_refreshCategories(); self:_refreshCatalog(); self:_refreshHotbar()
 end
+function BuildUI:SetInventoryCounts(counts)
+	self.InventoryCounts=type(counts)=="table" and counts or {}
+	self:_refreshCatalog(); self:_refreshHotbar()
+end
 function BuildUI:GetHotbarPart(slot) return self.HotbarIds[slot] end
 function BuildUI:SetSelectedPart(partType) self.SelectedPart=partType; self:_refreshCatalog(); self:_refreshHotbar() end
 function BuildUI:SetInspector(name,definition)
 	self.PartName.Text=definition and string.upper(definition.DisplayName or name) or string.upper(tostring(name or "NO COMPONENT")); if not definition then self.Description.Text=""; self.Stats.Text="NO DATA"; return end
-	self.Description.Text=tostring(definition.Description or ""); local lines={string.format("CATEGORY   %s",string.upper(tostring(definition.Category or "?"))),string.format("MASS       %.0f kg",tonumber(definition.Mass) or 0),string.format("HEALTH     %.0f",tonumber(definition.MaxHealth) or 0)}
+	self.Description.Text=tostring(definition.Description or ""); local ready=math.max(0,math.floor(tonumber(self.InventoryCounts[definition.Id]) or 0)); local lines={string.format("READY      %d",ready),string.format("CATEGORY   %s",string.upper(tostring(definition.Category or "?"))),string.format("MASS       %.0f kg",tonumber(definition.Mass) or 0),string.format("HEALTH     %.0f",tonumber(definition.MaxHealth) or 0)}
 	if definition.Size then table.insert(lines,string.format("BOUNDS     %.1f × %.1f × %.1f",definition.Size.X,definition.Size.Y,definition.Size.Z)) end
 	if definition.Power then table.insert(lines,string.format("POWER      +%.0f / -%.0f",tonumber(definition.Power.Generation) or 0,tonumber(definition.Power.Demand) or 0)); local storage=tonumber(definition.Power.StorageCapacity) or 0; if storage>0 then table.insert(lines,string.format("STORAGE    %.0f",storage)) end end
 	if definition.Heat then table.insert(lines,string.format("HEAT       %.1f/s",tonumber(definition.Heat.Generation) or 0)) end
