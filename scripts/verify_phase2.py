@@ -29,15 +29,10 @@ def text(path: str) -> str:
     return target.read_text(encoding="utf-8")
 
 
-camera_path = "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/WorkshopCamera.luau"
-input_path = "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildInput.luau"
-controller_path = "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau"
-ui_path = "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildUI.luau"
-
-camera = text(camera_path)
-build_input = text(input_path)
-controller = text(controller_path)
-ui = text(ui_path)
+camera = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/WorkshopCamera.luau")
+build_input = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildInput.luau")
+controller = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau")
+camera_bar = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/WorkshopCameraBar.luau")
 
 # P2-A workshop camera contract.
 check("Enum.CameraType.Scriptable" in camera, "WorkshopCamera must enter Scriptable camera mode")
@@ -63,9 +58,11 @@ check("workshopCamera:Deactivate" in controller, "BuildController must deactivat
 check("workshopCamera:SetMech" in controller, "BuildController must keep camera mech identity synchronized")
 check("workshopCamera:Update" in controller, "BuildController must tick WorkshopCamera on RenderStepped")
 
-check("SetCameraMode" in ui, "Workshop V3 must display workshop camera mode")
-check("F FRAME" in ui, "Workshop V3 must expose F FRAME control")
-check("CameraView" in ui, "Workshop V3 must expose engineering camera view callbacks")
+check("WorkshopCameraBar" in camera_bar, "WorkshopCameraBar module is missing")
+check("SetCameraMode" in camera_bar, "WorkshopCameraBar must display workshop camera mode")
+check("F FRAME" in camera_bar, "WorkshopCameraBar must expose F FRAME control")
+check("CameraView" in camera_bar, "WorkshopCameraBar must expose engineering camera view callbacks")
+check("WorkshopCameraBar" in controller, "BuildController must mount the compact camera bar")
 
 if ERRORS:
     print(f"PHASE 2 VERIFICATION FAILED: {len(ERRORS)} error(s) across {CHECKS} checks")
