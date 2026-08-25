@@ -1,5 +1,5 @@
 --!strict
--- Mounted thrust, drivetrain activity, fuel use and animated propulsion visuals.
+-- Mounted thrust, drivetrain activity, shared fuel use and animated propulsion visuals.
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -37,34 +37,6 @@ local function ensureForce(root: BasePart): VectorForce
 	return force
 end
 
-local function availableFuel(mech: any): number
-	local total=0
-	for _,component in pairs(mech.Components) do
-		if component.Fuel and tonumber(component.Fuel.Capacity) and tonumber(component.Fuel.Capacity)>0 then
-			local capacity=tonumber(component.Fuel.Capacity)
-			component.Fuel.Amount=math.clamp(tonumber(component.Fuel.Amount) or capacity,0,capacity)
-			total+=component.Fuel.Amount
-		end
-	end
-	return total
-end
-
-local function consumeFuel(mech: any, amount: number): boolean
-	if amount<=0 then return true end
-	if availableFuel(mech)+1e-6<amount then return false end
-	local remaining=amount
-	for _,component in pairs(mech.Components) do
-		if remaining<=0 then break end
-		if component.Fuel and tonumber(component.Fuel.Capacity) and tonumber(component.Fuel.Capacity)>0 then
-			local capacity=tonumber(component.Fuel.Capacity)
-			local current=math.clamp(tonumber(component.Fuel.Amount) or capacity,0,capacity)
-			local used=math.min(current,remaining)
-			component.Fuel.Amount=current-used; remaining-=used
-		end
-	end
-	return remaining<=1e-6
-end
-
 local function mechanicalPower(mech: any): number
 	local total=0
 	for _,component in pairs(mech.Components) do
@@ -79,6 +51,16 @@ end
 
 function Propulsion:Init(container: any)
 	self._mechs=container:Get("MechService")
+	self._fuel=container:Get("FuelService")
+end
+
+function Propulsion:_fuelFraction(mechId: string, propulsion: any, throttleMagnitude: number, dt: number): number
+	local rate=math.max(0,tonumber(propulsion.FuelUse) or 0)
+	if rate<=0 or throttleMagnitude<=0 then return 1 end
+	local needed=rate*throttleMagnitude*math.max(0,dt)
+	if needed<=0 then return 1 end
+	local supplied=self._fuel:Consume(mechId,tostring(propulsion.FuelType or "Liquid"),needed,true)
+	return math.clamp((tonumber(supplied) or 0)/needed,0,1)
 end
 
 function Propulsion:_stepModel(model: Model, dt: number)
@@ -86,8 +68,7 @@ function Propulsion:_stepModel(model: Model, dt: number)
 	local mech=self._mechs:Get(model.Name)
 	if not mech then return end
 
-	-- Update engine/motor availability first. This is the shared truth consumed by VehicleService
-	-- and by downstream mechanical propellers on the next simulation step.
+	-- Engines/motors establish the mechanical resource used by VehicleService and propellers.
 	for _,component in pairs(mech.Components) do
 		local p=component.Propulsion
 		if component.Destroyed or not p or (p.Kind~="Engine" and p.Kind~="Motor") then continue end
@@ -95,9 +76,8 @@ function Propulsion:_stepModel(model: Model, dt: number)
 		local state=component.Metadata.ControlState or {}
 		local throttle=math.abs(axis(state,"ThrottleForward","ThrottleReverse"))
 		local resourceFraction=1
-		if p.Kind=="Motor" then resourceFraction=math.clamp(tonumber(component.Metadata.PowerFraction) or 0,0,1) end
-		local fuelUse=math.max(0,tonumber(p.FuelUse) or 0)*throttle*dt
-		if fuelUse>0 and not consumeFuel(mech,fuelUse) then resourceFraction=0 end
+		if p.Kind=="Motor" then resourceFraction=math.clamp(tonumber(component.Metadata.PowerFraction) or 0,0,1)
+		else resourceFraction*=self:_fuelFraction(model.Name,p,throttle,dt) end
 		component.Metadata.PropulsionFraction=throttle*resourceFraction
 	end
 
@@ -122,13 +102,12 @@ function Propulsion:_stepModel(model: Model, dt: number)
 		if kind=="Jet" or kind=="Rocket" or kind=="Vector" then throttle=math.max(0,throttle) end
 
 		local powerFraction=math.clamp(tonumber(component.Metadata.PowerFraction) or 1,0,1)
-		if kind=="Engine" then powerFraction=math.clamp(tonumber(component.Metadata.PropulsionFraction) or 0,0,1) end
-		if kind=="Motor" then powerFraction=math.clamp(tonumber(component.Metadata.PropulsionFraction) or 0,0,1) end
+		if kind=="Engine" or kind=="Motor" then powerFraction=math.clamp(tonumber(component.Metadata.PropulsionFraction) or 0,0,1) end
 		if kind=="Propeller" or kind=="LiftFan" then powerFraction*=mechanicalFraction end
 
 		if kind~="Engine" and kind~="Motor" then
-			local fuelUse=math.max(0,tonumber(p.FuelUse) or 0)*math.abs(throttle)*dt
-			if fuelUse>0 and not consumeFuel(mech,fuelUse) then throttle=0; powerFraction=0 end
+			local fuelFraction=self:_fuelFraction(model.Name,p,math.abs(throttle),dt)
+			powerFraction*=fuelFraction
 		end
 		component.Metadata.PropulsionFraction=math.abs(throttle)*powerFraction
 
@@ -141,7 +120,8 @@ function Propulsion:_stepModel(model: Model, dt: number)
 				local yaw=axis(state,"YawRight","YawLeft")
 				local pitch=axis(state,"PitchUp","PitchDown")
 				local degrees=math.rad(math.max(0,tonumber(p.GimbalDegrees) or 15))
-				localDirection=(CFrame.Angles(pitch*degrees,yaw*degrees,0):VectorToWorldSpace(localDirection)).Unit
+				local transformed=CFrame.Angles(pitch*degrees,yaw*degrees,0):VectorToWorldSpace(localDirection)
+				if transformed.Magnitude>.001 then localDirection=transformed.Unit end
 			end
 			force.Force=root.CFrame:VectorToWorldSpace(localDirection)*magnitude
 		end
