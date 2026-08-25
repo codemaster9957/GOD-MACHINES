@@ -31,6 +31,15 @@ function BuildInput.new(UserInputService, callbacks)
 
 		local slot = NUMBER_KEYS[input.KeyCode]
 		if slot then callbacks.SelectSlot(slot); return end
+
+		-- Workshop camera commands stay client-only and do not overlap build mutations.
+		if input.KeyCode == Enum.KeyCode.F then callbacks.FrameCamera(); return end
+		if input.KeyCode == Enum.KeyCode.V then callbacks.ToggleFreeFly(); return end
+		if input.KeyCode == Enum.KeyCode.Home then callbacks.CameraView("Home"); return end
+		if input.KeyCode == Enum.KeyCode.KeypadOne then callbacks.CameraView("Front"); return end
+		if input.KeyCode == Enum.KeyCode.KeypadThree then callbacks.CameraView("Right"); return end
+		if input.KeyCode == Enum.KeyCode.KeypadSeven then callbacks.CameraView("Top"); return end
+
 		if input.KeyCode == Enum.KeyCode.R then callbacks.Rotate(); return end
 		if input.KeyCode == Enum.KeyCode.M then callbacks.Mirror(); return end
 		if input.KeyCode == Enum.KeyCode.X or input.KeyCode == Enum.KeyCode.Delete then callbacks.Remove(); return end
