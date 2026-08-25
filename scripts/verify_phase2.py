@@ -47,22 +47,48 @@ check("CameraSubject" in camera and "MouseBehavior" in camera and "MouseIconEnab
 check("_restoreState" in camera or "restoreState" in camera, "WorkshopCamera needs an explicit restoration path")
 check("Raycast" in camera and "RaycastParams" in camera, "WorkshopCamera must shorten against world obstruction")
 check("GetBoundingBox" in camera, "WorkshopCamera framing must use machine/component bounds")
-
 check("FrameCamera" in build_input, "BuildInput must expose FrameCamera")
 check("ToggleFreeFly" in build_input, "BuildInput must expose ToggleFreeFly")
 check("CameraView" in build_input, "BuildInput must expose CameraView")
-
 check("WorkshopCamera" in controller, "BuildController must require WorkshopCamera")
 check("workshopCamera:Activate" in controller, "BuildController must activate WorkshopCamera with build mode")
 check("workshopCamera:Deactivate" in controller, "BuildController must deactivate WorkshopCamera")
 check("workshopCamera:SetMech" in controller, "BuildController must keep camera mech identity synchronized")
 check("workshopCamera:Update" in controller, "BuildController must tick WorkshopCamera on RenderStepped")
-
 check("WorkshopCameraBar" in camera_bar, "WorkshopCameraBar module is missing")
 check("SetCameraMode" in camera_bar, "WorkshopCameraBar must display workshop camera mode")
 check("F FRAME" in camera_bar, "WorkshopCameraBar must expose F FRAME control")
 check("CameraView" in camera_bar, "WorkshopCameraBar must expose engineering camera view callbacks")
 check("WorkshopCameraBar" in controller, "BuildController must mount the compact camera bar")
+
+# P2-B build geometry / nodes / symmetry contract.
+helpers = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinitionHelpers.luau")
+build_math = text("src/ReplicatedStorage/MechFramework/Shared/BuildMath.luau")
+structural = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinitions/Structural.luau")
+catalog = text("src/ReplicatedStorage/MechFramework/Shared/PartCatalog.luau")
+preview = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildPreview.luau")
+build_service = text("src/ServerScriptService/MechFramework/Services/BuildService.luau")
+selection = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildSelection.luau")
+symmetry_preview = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/SymmetryPreview.luau")
+
+for part_id in (
+    "StudBlock", "HalfStudBlock", "LongStudBeam", "StructuralPlate",
+    "CornerBlock", "TriangularBlock", "RoundStructuralCell",
+):
+    check(f'"{part_id}"' in structural, f"missing Phase 2 structural part: {part_id}")
+
+check("function H.faceGridNodes" in helpers, "face-grid node helper is missing")
+check("function H.mergeNodes" in helpers, "node merge helper is missing")
+check("OrientationCFrame" in build_math, "BuildMath normalized XYZ orientation helper is missing")
+check("LegacyOrientation" in build_math or "NormalizeOrientation" in build_math, "legacy rotation compatibility helper is missing")
+check("#ordered >= 100" in catalog or "#ordered < 100" in catalog, "catalog validation is still exact-100 only")
+check("StudBlock" in catalog, "catalog required-ID validation does not include Phase 2 structures")
+check("CycleSnap" in preview, "BuildPreview snap candidate cycling is missing")
+check("SnapCandidates" in preview or "_rankCompatiblePairs" in preview, "BuildPreview deterministic snap ranking is missing")
+check("BuildSelection" in selection, "BuildSelection module is missing")
+check("SymmetryPreview" in symmetry_preview, "SymmetryPreview module is missing")
+for action in ("GroupDuplicate", "GroupMirror", "GroupRemove", "GroupMove", "SymmetryPlace"):
+    check(action in build_service, f"BuildService Phase 2 action missing: {action}")
 
 if ERRORS:
     print(f"PHASE 2 VERIFICATION FAILED: {len(ERRORS)} error(s) across {CHECKS} checks")
