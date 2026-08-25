@@ -9,6 +9,11 @@ local function cloneArray(values: any): any
 	return out
 end
 
+local function quarter(value: any): number
+	local number=tonumber(value) or 0
+	return ((math.floor(number)%4)+4)%4
+end
+
 function BuildMath.Compatible(a: {[string]: any}, b: {[string]: any}): boolean
 	local acceptsA=a.Accepts or {"*"}
 	local acceptsB=b.Accepts or {"*"}
@@ -31,9 +36,40 @@ function BuildMath.MirrorX(transform: CFrame): CFrame
 	)
 end
 
-function BuildMath.Snap(targetWorld: CFrame, targetNode: CFrame, sourceNode: CFrame, quarterTurns: number): CFrame
-	local rotation=CFrame.Angles(0,0,math.rad((quarterTurns%4)*90))
-	return targetWorld*targetNode*CFrame.Angles(0,math.pi,0)*rotation*sourceNode:Inverse()
+-- Old requests stored one integer that rotated around the mounted node's local normal.
+-- Keep it as an explicit legacy path so existing blueprints do not silently rotate differently.
+function BuildMath.LegacyOrientation(turns: any): {[string]: number}
+	return {X=0,Y=0,Z=quarter(turns),Legacy=true}
+end
+
+function BuildMath.NormalizeOrientation(value: any): {[string]: any}
+	if type(value)=="number" then return BuildMath.LegacyOrientation(value) end
+	if type(value)~="table" then return {X=0,Y=0,Z=0} end
+	return {
+		X=quarter(value.X),
+		Y=quarter(value.Y),
+		Z=quarter(value.Z),
+		Legacy=value.Legacy==true,
+	}
+end
+
+function BuildMath.OrientationCFrame(value: any): CFrame
+	local orientation=BuildMath.NormalizeOrientation(value)
+	local unit=math.pi/2
+	return CFrame.Angles(orientation.X*unit,orientation.Y*unit,orientation.Z*unit)
+end
+
+-- Snap supports both formats:
+-- * number = exact legacy node-normal quarter-turn semantics.
+-- * {X,Y,Z} = rotate the component/source-node in component-local space before alignment.
+function BuildMath.Snap(targetWorld: CFrame, targetNode: CFrame, sourceNode: CFrame, orientationValue: any): CFrame
+	if type(orientationValue)=="number" then
+		local rotation=CFrame.Angles(0,0,math.rad((quarter(orientationValue))*90))
+		return targetWorld*targetNode*CFrame.Angles(0,math.pi,0)*rotation*sourceNode:Inverse()
+	end
+	local orientation=BuildMath.OrientationCFrame(orientationValue)
+	local orientedSource=orientation*sourceNode
+	return targetWorld*targetNode*CFrame.Angles(0,math.pi,0)*orientedSource:Inverse()
 end
 
 function BuildMath.AttachmentNodes(definition: {[string]: any}, mirrorX: boolean?): {any}
