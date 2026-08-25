@@ -18,6 +18,19 @@ local function rootParts(model:Model):{BasePart}
 	local out={}; for _,descendant in ipairs(model:GetDescendants()) do if descendant:IsA("BasePart") and descendant:GetAttribute("ComponentRoot")==true then table.insert(out,descendant) end end; return out
 end
 local function componentCount(components:any):number local count=0; for _ in pairs(components or {}) do count+=1 end; return count end
+local function neutralizeModel(model:Model,ejectSeats:boolean)
+	for _,descendant in ipairs(model:GetDescendants()) do
+		if descendant:IsA("VectorForce") then
+			descendant.Force=Vector3.zero
+		elseif descendant:IsA("LinearVelocity") then
+			descendant.VectorVelocity=Vector3.zero
+		elseif descendant:IsA("AngularVelocity") then
+			descendant.AngularVelocity=Vector3.zero
+		elseif ejectSeats and (descendant:IsA("Seat") or descendant:IsA("VehicleSeat")) and descendant.Occupant then
+			descendant.Occupant.Sit=false
+		end
+	end
+end
 
 function Pilot:Init(container:any)
 	self._mechs=container:Get("MechService")
@@ -44,6 +57,8 @@ function Pilot:_setEditMode(player:Player,mechId:string,editMode:boolean):(boole
 	if not self._mechs:IsOwner(player.UserId,mechId) then return false,"NotAuthorized" end
 	local model=assemblyModel(mechId); if not model then return false,"MachineNotRealized" end
 	self._control:ClearMech(mechId)
+	-- Remove every stale actuator force before anchoring or unanchoring so previous throttle can never leak across modes.
+	neutralizeModel(model,editMode)
 	model:SetAttribute("EditMode",editMode)
 	for _,root in ipairs(rootParts(model)) do
 		root.AssemblyLinearVelocity=Vector3.zero
@@ -68,19 +83,12 @@ end
 
 local function compactComponent(id:string,component:any,origin:CFrame):any
 	local meta=component.Metadata or {}
-	return {
-		Id=id,
-		PartType=component.PartType,
-		LocalTransform=origin:ToObjectSpace(component.LocalTransform),
-		Metadata={Paint=clone(meta.Paint or {}),MirrorX=meta.MirrorX==true},
-	}
+	return {Id=id,PartType=component.PartType,LocalTransform=origin:ToObjectSpace(component.LocalTransform),Metadata={Paint=clone(meta.Paint or {}),MirrorX=meta.MirrorX==true}}
 end
 
 local function compactConnections(connections:any):any
 	local out={}
-	for edgeId,edge in pairs(connections or {}) do
-		out[edgeId]={Id=edgeId,A=edge.A,B=edge.B,SocketA=edge.SocketA,SocketB=edge.SocketB,StructuralStrength=tonumber(edge.StructuralStrength) or 100}
-	end
+	for edgeId,edge in pairs(connections or {}) do out[edgeId]={Id=edgeId,A=edge.A,B=edge.B,SocketA=edge.SocketA,SocketB=edge.SocketB,StructuralStrength=tonumber(edge.StructuralStrength) or 100} end
 	return out
 end
 
@@ -94,10 +102,7 @@ function Pilot:_blueprint(player:Player,mechId:string,name:string):(boolean,any)
 	for id,component in pairs(snapshot.Components) do components[id]=compactComponent(id,component,origin) end
 	local primaryId=snapshot.Metadata and snapshot.Metadata.PrimaryComponentId
 	if type(primaryId)~="string" or components[primaryId]==nil then primaryId=nil end
-	local blueprint={
-		Id=name,Name=name,Components=components,Connections=compactConnections(snapshot.Connections),
-		Controls=self._control:GetBindings(mechId),PrimaryComponentId=primaryId,SavedAt=os.time(),
-	}
+	local blueprint={Id=name,Name=name,Components=components,Connections=compactConnections(snapshot.Connections),Controls=self._control:GetBindings(mechId),PrimaryComponentId=primaryId,SavedAt=os.time()}
 	local ok,reason=self._save:SetBlueprint(player.UserId,name,blueprint)
 	return ok,if ok then {Name=name,PartCount=componentCount(components)} else reason
 end
@@ -108,9 +113,7 @@ function Pilot:_spawnBlueprint(player:Player,name:string):(boolean,any)
 	local blueprint=self._save:GetBlueprint(player.UserId,name); if not blueprint then return false,"BlueprintNotFound" end
 	local character=player.Character; local hrp=character and character:FindFirstChild("HumanoidRootPart")
 	if not hrp or not hrp:IsA("BasePart") then return false,"CharacterNotReady" end
-	local ok,result=self._build:SpawnBlueprint(player.UserId,blueprint,hrp.CFrame*CFrame.new(0,1,-12),{
-		BuildOrigin=true,BattleSpawn=false,ConsumeInventory=true,
-	})
+	local ok,result=self._build:SpawnBlueprint(player.UserId,blueprint,hrp.CFrame*CFrame.new(0,1,-12),{BuildOrigin=true,BattleSpawn=false,ConsumeInventory=true})
 	if not ok then return false,result end
 	local mechId=result; player:SetAttribute("ActiveMechId",mechId)
 	if type(blueprint.Controls)=="table" then self._control:SetBindings(player.UserId,mechId,blueprint.Controls,true) else self._control:GenerateDefaultBindings(player.UserId,mechId,true) end
