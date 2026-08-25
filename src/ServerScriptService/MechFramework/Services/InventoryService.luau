@@ -11,6 +11,8 @@ local Config = require(game.ReplicatedStorage.MechFramework.Shared.FrameworkConf
 local Inventory: any = { _players = {}, _parts = nil }
 local STUDIO_STACK_AMOUNT = 50
 local STUDIO_UNIQUE_AMOUNT = 12
+local MAX_APPLIED_TRANSACTIONS = 512
+local MAX_TRANSACTION_ID_LENGTH = 240
 
 local function clone(value: any): any
 	if type(value) ~= "table" then return value end
@@ -30,6 +32,16 @@ local function ledger(self: any, userId: number): any
 end
 
 local function bump(record: any) record.Revision += 1 end
+
+local function pruneTransactions(record: any)
+	local entries = {}
+	for id, timestamp in pairs(record.AppliedTransactions or {}) do
+		table.insert(entries, {Id=id, Time=tonumber(timestamp) or 0})
+	end
+	if #entries <= MAX_APPLIED_TRANSACTIONS then return end
+	table.sort(entries, function(a,b) return if a.Time==b.Time then a.Id<b.Id else a.Time<b.Time end)
+	for index=1,#entries-MAX_APPLIED_TRANSACTIONS do record.AppliedTransactions[entries[index].Id]=nil end
+end
 
 function Inventory:Init(container: any)
 	self._parts = container:Get("PartRegistry")
@@ -176,13 +188,21 @@ function Inventory:SetCondition(userId: number, uniqueId: string, durability: nu
 	return true, clone(item)
 end
 
-function Inventory:ApplyTransactionOnce(userId: number, transactionId: string, callback: (any) -> ()): boolean
+function Inventory:ApplyTransactionOnce(userId: number, transactionId: string, callback: (any) -> ()): (boolean, string?)
+	if type(transactionId)~="string" or transactionId=="" or #transactionId>MAX_TRANSACTION_ID_LENGTH then return false,"InvalidTransaction" end
 	local record = ledger(self, userId)
-	if record.AppliedTransactions[transactionId] then return false end
-	callback(record)
+	if record.AppliedTransactions[transactionId] then return false,"AlreadyApplied" end
+	local before = clone(record)
+	local ok, reason = pcall(callback, record)
+	if not ok then
+		self._players[userId] = before
+		warn("[MechFramework] Inventory transaction rolled back", transactionId, reason)
+		return false,"TransactionFailed"
+	end
 	record.AppliedTransactions[transactionId] = os.time()
+	pruneTransactions(record)
 	bump(record)
-	return true
+	return true,nil
 end
 
 function Inventory:Snapshot(userId: number): any return clone(ledger(self, userId)) end
@@ -199,18 +219,27 @@ function Inventory:Restore(userId: number, snapshot: any)
 			end
 		end
 		for id, item in pairs(snapshot.Unique or {}) do
-			local metadata = if type(item) == "table" and type(item.PartType) == "string" then self:GetPartMetadata(item.PartType) else nil
+			local metadata = if type(id)=="string" and type(item) == "table" and type(item.PartType) == "string" then self:GetPartMetadata(item.PartType) else nil
 			if metadata then
 				local migrated = clone(item)
+				migrated.UniqueId = id
+				migrated.OwnerUserId = userId
 				migrated.PartType = metadata.Id
-				migrated.MaxDurability = tonumber(migrated.MaxDurability) or metadata.MaxDurability
-				migrated.Durability = math.clamp(tonumber(migrated.Durability) or migrated.MaxDurability, 0, migrated.MaxDurability)
+				migrated.MaxDurability = math.max(1,math.floor(tonumber(migrated.MaxDurability) or metadata.MaxDurability))
+				migrated.Durability = math.clamp(math.floor(tonumber(migrated.Durability) or migrated.MaxDurability), 0, migrated.MaxDurability)
 				restored.Unique[id] = migrated
 			end
 		end
-		restored.Materials = clone(snapshot.Materials or {})
-		restored.Revision = tonumber(snapshot.Revision) or 0
-		restored.AppliedTransactions = clone(snapshot.AppliedTransactions or {})
+		for materialId, amount in pairs(snapshot.Materials or {}) do
+			if type(materialId)=="string" and Definitions.Materials[materialId] and type(amount)=="number" and amount>=0 and amount%1==0 then restored.Materials[materialId]=amount end
+		end
+		restored.Revision = math.max(0,math.floor(tonumber(snapshot.Revision) or 0))
+		for transactionId, timestamp in pairs(snapshot.AppliedTransactions or {}) do
+			if type(transactionId)=="string" and transactionId~="" and #transactionId<=MAX_TRANSACTION_ID_LENGTH and type(timestamp)=="number" and timestamp>=0 then
+				restored.AppliedTransactions[transactionId]=timestamp
+			end
+		end
+		pruneTransactions(restored)
 	else
 		for partType, amount in pairs(snapshot) do
 			local metadata = if type(partType) == "string" then self:GetPartMetadata(partType) else nil
