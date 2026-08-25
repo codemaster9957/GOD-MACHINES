@@ -1,5 +1,5 @@
 --!strict
--- Reliable session persistence: UpdateAsync locking, retries, autosave, migrations, and shutdown flush.
+-- Reliable session persistence: UpdateAsync locking, retries, autosave, migrations, blueprints and shutdown flush.
 -- Studio debug sessions intentionally stay local so development does not depend on API Services being enabled.
 
 local Players = game:GetService("Players")
@@ -22,6 +22,8 @@ local Save: any = {
 local SESSION_TIMEOUT = 180
 local AUTOSAVE_SECONDS = 60
 local MAX_ATTEMPTS = 5
+local MAX_BLUEPRINTS = 30
+local MAX_BLUEPRINT_COMPONENTS = 400
 
 local function clone(value: any): any
 	if type(value) ~= "table" then return value end
@@ -39,6 +41,18 @@ local function retry(callback: () -> any): (boolean, any)
 		task.wait(math.min(2 ^ (attempt - 1), 8))
 	end
 	return false, lastError
+end
+
+local function countMap(map: any): number
+	local count = 0
+	for _ in pairs(map or {}) do count += 1 end
+	return count
+end
+
+local function cleanName(value: string): string
+	local name = value:match("^%s*(.-)%s*$") or ""
+	name = name:gsub("[%c]", "")
+	return name
 end
 
 function Save:Init(container: any)
@@ -77,11 +91,38 @@ function Save:GetBlueprint(userId: number, blueprintId: string): any?
 	return blueprint and clone(blueprint) or nil
 end
 
+function Save:ListBlueprints(userId: number): {any}
+	local result = {}
+	for name, blueprint in pairs(self._blueprints[userId] or {}) do
+		table.insert(result, {
+			Name = name,
+			PartCount = countMap(blueprint.Components),
+			SavedAt = tonumber(blueprint.SavedAt) or 0,
+		})
+	end
+	table.sort(result, function(a, b)
+		if a.SavedAt ~= b.SavedAt then return a.SavedAt > b.SavedAt end
+		return a.Name < b.Name
+	end)
+	return result
+end
+
 function Save:SetBlueprint(userId: number, blueprintId: string, blueprint: any): (boolean, string?)
-	if type(blueprintId) ~= "string" or blueprintId == "" or type(blueprint) ~= "table" then return false, "InvalidBlueprint" end
+	if type(blueprintId) ~= "string" or type(blueprint) ~= "table" then return false, "InvalidBlueprint" end
+	local name = cleanName(blueprintId)
+	if name == "" or #name > 40 then return false, "InvalidBlueprintName" end
 	if type(blueprint.Components) ~= "table" then return false, "ComponentsRequired" end
+	local partCount = countMap(blueprint.Components)
+	if partCount < 1 then return false, "EmptyBlueprint" end
+	if partCount > MAX_BLUEPRINT_COMPONENTS then return false, "BlueprintTooLarge" end
 	self._blueprints[userId] = self._blueprints[userId] or {}
-	self._blueprints[userId][blueprintId] = clone(blueprint)
+	local owned = self._blueprints[userId]
+	if owned[name] == nil and countMap(owned) >= MAX_BLUEPRINTS then return false, "BlueprintLimitReached" end
+	local stored = clone(blueprint)
+	stored.Id = name
+	stored.Name = name
+	stored.SavedAt = os.time()
+	owned[name] = stored
 	return true, nil
 end
 
@@ -94,14 +135,13 @@ end
 
 function Save:_grantStudioBuildInventory(userId: number)
 	if not (RunService:IsStudio() and Config.Debug) then return end
-	-- InventoryService owns the canonical 100-part development seed.
 	self._inventory:EnsureStudioBuildInventory(userId)
 end
 
 function Save:_loadStudio(player: Player)
 	local userId = player.UserId
 	if self._sessions[userId] then return end
-	self._sessions[userId] = { Id = "StudioLocal:" .. tostring(userId), Key = "", LastSave = os.clock(), LocalOnly = true }
+	self._sessions[userId] = { Id="StudioLocal:"..tostring(userId), Key="", LastSave=os.clock(), LocalOnly=true }
 	self._inventory:Restore(userId, {})
 	self._blueprints[userId] = {}
 	self:_grantStudioBuildInventory(userId)
@@ -116,87 +156,62 @@ function Save:_load(player: Player)
 	local key = "Player_" .. userId
 	local now = os.time()
 	local acquired = false
-
 	local ok, record = retry(function()
 		return store:UpdateAsync(key, function(old: any)
-			old = if type(old) == "table" then old else { SchemaVersion = Config.SchemaVersion, UserId = userId, Inventory = {}, Blueprints = {} }
+			old = if type(old)=="table" then old else {SchemaVersion=Config.SchemaVersion,UserId=userId,Inventory={},Blueprints={}}
 			local session = old.Session
-			if session and session.Id ~= sessionId and now - (tonumber(session.Heartbeat) or now) < SESSION_TIMEOUT then return nil end
-			old.Session = { Id = sessionId, Heartbeat = now }
-			acquired = true
-			return old
+			if session and session.Id ~= sessionId and now-(tonumber(session.Heartbeat) or now)<SESSION_TIMEOUT then return nil end
+			old.Session={Id=sessionId,Heartbeat=now}; acquired=true; return old
 		end)
 	end)
-
-	if not ok or not acquired or type(record) ~= "table" then
-		warn("[MechFramework] Failed to acquire save session", userId, record)
+	if not ok or not acquired or type(record)~="table" then
+		warn("[MechFramework] Failed to acquire save session",userId,record)
 		player:Kick("Inventory session could not be loaded safely. Please rejoin.")
 		return
 	end
-
-	record = self:Migrate(record)
-	self._sessions[userId] = { Id = sessionId, Key = key, LastSave = os.clock(), LocalOnly = false }
-	self._inventory:Restore(userId, record.Inventory or {})
-	self._blueprints[userId] = clone(record.Blueprints or {})
+	record=self:Migrate(record)
+	self._sessions[userId]={Id=sessionId,Key=key,LastSave=os.clock(),LocalOnly=false}
+	self._inventory:Restore(userId,record.Inventory or {})
+	self._blueprints[userId]=clone(record.Blueprints or {})
 end
 
 function Save:_releaseLocal(userId: number)
-	self._sessions[userId] = nil
-	self._inventory:RemovePlayer(userId)
-	self._blueprints[userId] = nil
+	self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil
 end
 
 function Save:_save(userId: number, release: boolean): boolean
-	local session = self._sessions[userId]
+	local session=self._sessions[userId]
 	if not session then return true end
-	if session.LocalOnly == true then
-		session.LastSave = os.clock()
-		if release then self:_releaseLocal(userId) end
-		return true
-	end
-
-	local payload = self:BuildPlayerRecord(userId)
-	local ok, result = retry(function()
-		return store:UpdateAsync(session.Key, function(old: any)
-			if type(old) == "table" and old.Session and old.Session.Id ~= session.Id then return nil end
-			payload.Session = if release then nil else { Id = session.Id, Heartbeat = os.time() }
-			return payload
+	if session.LocalOnly==true then session.LastSave=os.clock(); if release then self:_releaseLocal(userId) end; return true end
+	local payload=self:BuildPlayerRecord(userId)
+	local ok,result=retry(function()
+		return store:UpdateAsync(session.Key,function(old:any)
+			if type(old)=="table" and old.Session and old.Session.Id~=session.Id then return nil end
+			payload.Session=if release then nil else {Id=session.Id,Heartbeat=os.time()}; return payload
 		end)
 	end)
-
-	if ok then session.LastSave = os.clock() elseif result then warn("[MechFramework] Save failed", userId, result) end
-	if release and ok then
-		self._sessions[userId] = nil
-		self._inventory:RemovePlayer(userId)
-		self._blueprints[userId] = nil
-	end
+	if ok then session.LastSave=os.clock() elseif result then warn("[MechFramework] Save failed",userId,result) end
+	if release and ok then self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end
 	return ok
 end
 
 function Save:Start()
 	Players.PlayerAdded:Connect(function(player) task.spawn(function() self:_load(player) end) end)
-	Players.PlayerRemoving:Connect(function(player) self:_save(player.UserId, true) end)
-	for _, player in ipairs(Players:GetPlayers()) do task.spawn(function() self:_load(player) end) end
-
+	Players.PlayerRemoving:Connect(function(player) self:_save(player.UserId,true) end)
+	for _,player in ipairs(Players:GetPlayers()) do task.spawn(function() self:_load(player) end) end
 	task.spawn(function()
 		while not self._closing do
 			task.wait(10)
-			for userId, session in pairs(self._sessions) do
-				if os.clock() - session.LastSave >= AUTOSAVE_SECONDS then task.spawn(function() self:_save(userId, false) end) end
-			end
+			for userId,session in pairs(self._sessions) do if os.clock()-session.LastSave>=AUTOSAVE_SECONDS then task.spawn(function() self:_save(userId,false) end) end end
 		end
 	end)
-
 	game:BindToClose(function()
-		self._closing = true
+		self._closing=true
 		if RunService:IsStudio() then return end
-		local pending = 0
-		for userId in pairs(self._sessions) do
-			pending += 1
-			task.spawn(function() self:_save(userId, true); pending -= 1 end)
-		end
-		local deadline = os.clock() + 25
-		while pending > 0 and os.clock() < deadline do task.wait(0.1) end
+		local pending=0
+		for userId in pairs(self._sessions) do pending+=1; task.spawn(function() self:_save(userId,true); pending-=1 end) end
+		local deadline=os.clock()+25
+		while pending>0 and os.clock()<deadline do task.wait(.1) end
 	end)
 end
 
