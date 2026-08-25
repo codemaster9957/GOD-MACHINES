@@ -18,6 +18,21 @@ local function freeTransform(hitPosition,size,turns)
 	return CFrame.new(hitPosition+Vector3.new(0,size.Y/2,0))*CFrame.Angles(0,math.rad((turns%4)*90),0)
 end
 
+local function componentRootFrom(instance)
+	local current=instance
+	while current and current~=workspace do
+		if current:IsA("BasePart") and current:GetAttribute("ComponentRoot")==true and current:GetAttribute("ComponentId")~=nil then
+			return current
+		end
+		if current:IsA("Model") and current:GetAttribute("ComponentId")~=nil then
+			local root=current.PrimaryPart or current:FindFirstChild("Root")
+			if root and root:IsA("BasePart") and root:GetAttribute("ComponentRoot")==true then return root end
+		end
+		current=current.Parent
+	end
+	return nil
+end
+
 function BuildPreview.new(mouse,BuildMath)
 	local self=setmetatable({},BuildPreview)
 	self.Mouse=mouse; self.BuildMath=BuildMath; self.Enabled=false; self.Definition=nil
@@ -120,10 +135,10 @@ function BuildPreview:Update(activeMechId)
 	if not self.Enabled or not self.Ghost or not self.Definition then self.LastState="OFF"; return self.LastState end
 	self.TargetPart,self.TargetNode,self.SourceNode=nil,nil,nil
 	local hitPosition=self.Mouse.Hit.Position
-	local candidate=self.Mouse.Target
+	local candidate=componentRootFrom(self.Mouse.Target)
 	self.PreviewCFrame=freeTransform(hitPosition,self.Definition.Size,self.Turns)
 
-	if candidate and candidate:GetAttribute("ComponentRoot")==true and candidate:GetAttribute("ComponentId")~=nil then
+	if candidate then
 		local candidateMechId=candidate:GetAttribute("MechId")
 		if type(activeMechId)~="string" then self:_moveGhost(self.PreviewCFrame); self.LastState="START_ON_GROUND"; self:_setVisualState(self.LastState); return self.LastState end
 		if candidateMechId~=activeMechId then self:_moveGhost(self.PreviewCFrame); self.LastState="OTHER_MECH"; self:_setVisualState(self.LastState); return self.LastState end
