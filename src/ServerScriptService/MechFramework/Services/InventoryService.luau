@@ -8,11 +8,7 @@ local HttpService = game:GetService("HttpService")
 local Definitions = require(game.ReplicatedStorage.MechFramework.Shared.CollectionDefinitions)
 local Config = require(game.ReplicatedStorage.MechFramework.Shared.FrameworkConfig)
 
-local Inventory: any = {
-	_players = {},
-	_parts = nil,
-}
-
+local Inventory: any = { _players = {}, _parts = nil }
 local STUDIO_STACK_AMOUNT = 50
 local STUDIO_UNIQUE_AMOUNT = 12
 
@@ -29,16 +25,11 @@ end
 
 local function ledger(self: any, userId: number): any
 	local record = self._players[userId]
-	if not record then
-		record = freshRecord()
-		self._players[userId] = record
-	end
+	if not record then record = freshRecord(); self._players[userId] = record end
 	return record
 end
 
-local function bump(record: any)
-	record.Revision += 1
-end
+local function bump(record: any) record.Revision += 1 end
 
 function Inventory:Init(container: any)
 	self._parts = container:Get("PartRegistry")
@@ -58,11 +49,12 @@ function Inventory:GetPartMetadata(partType: string): any?
 end
 
 function Inventory:GetCount(userId: number, partType: string): number
+	local metadata = self:GetPartMetadata(partType)
+	if not metadata then return 0 end
+	local canonical = metadata.Id
 	local record = ledger(self, userId)
-	local count = tonumber(record.Stacks[partType]) or 0
-	for _, item in pairs(record.Unique) do
-		if item.PartType == partType then count += 1 end
-	end
+	local count = tonumber(record.Stacks[canonical]) or 0
+	for _, item in pairs(record.Unique) do if item.PartType == canonical then count += 1 end end
 	return count
 end
 
@@ -70,19 +62,17 @@ function Inventory:GrantPart(userId: number, partType: string, amount: number, m
 	local definition = self:GetPartMetadata(partType)
 	assert(definition ~= nil, "Unknown part definition: " .. tostring(partType))
 	assert(amount > 0 and amount % 1 == 0, "Amount must be a positive integer")
-
+	local canonical = definition.Id
 	local record = ledger(self, userId)
 	local created = {}
 	if definition.Stackable then
-		record.Stacks[partType] = (record.Stacks[partType] or 0) + amount
+		record.Stacks[canonical] = (record.Stacks[canonical] or 0) + amount
 	else
 		for _ = 1, amount do
 			local id = HttpService:GenerateGUID(false)
 			local ratio = math.clamp((metadata and metadata.Condition) or 1, 0, 1)
 			local item = {
-				UniqueId = id,
-				PartType = partType,
-				OwnerUserId = userId,
+				UniqueId = id, PartType = canonical, OwnerUserId = userId,
 				Rarity = definition.Rarity,
 				Durability = math.floor(definition.MaxDurability * ratio + 0.5),
 				MaxDurability = definition.MaxDurability,
@@ -105,14 +95,11 @@ end
 function Inventory:EnsureStudioBuildInventory(userId: number)
 	if not (RunService:IsStudio() and Config.Debug) then return end
 	assert(self._parts ~= nil, "InventoryService must be initialized before Studio inventory seed")
-
 	local grantedKinds = 0
 	for _, definition in ipairs(self._parts:GetList()) do
 		local desired = if definition.Stackable == false then STUDIO_UNIQUE_AMOUNT else STUDIO_STACK_AMOUNT
 		local current = self:GetCount(userId, definition.Id)
-		if current < desired then
-			self:GrantPart(userId, definition.Id, desired - current, { Source = "StudioDebug" })
-		end
+		if current < desired then self:GrantPart(userId, definition.Id, desired - current, { Source = "StudioDebug" }) end
 		grantedKinds += 1
 	end
 	print("[MechFramework] Studio build inventory ready", userId, grantedKinds, "part types")
@@ -120,33 +107,26 @@ end
 
 function Inventory:Start()
 	if not (RunService:IsStudio() and Config.Debug) then return end
-	Players.PlayerAdded:Connect(function(player)
-		self:EnsureStudioBuildInventory(player.UserId)
-	end)
-	for _, player in ipairs(Players:GetPlayers()) do
-		self:EnsureStudioBuildInventory(player.UserId)
-	end
+	Players.PlayerAdded:Connect(function(player) self:EnsureStudioBuildInventory(player.UserId) end)
+	for _, player in ipairs(Players:GetPlayers()) do self:EnsureStudioBuildInventory(player.UserId) end
 end
 
 function Inventory:Consume(userId: number, partType: string, amount: number): boolean
-	if not self:GetPartMetadata(partType) or amount <= 0 or amount % 1 ~= 0 then return false end
-	-- Preflight before mutation so a failed mixed stack/unique consume cannot lose items.
-	if self:GetCount(userId, partType) < amount then return false end
-
+	local metadata = self:GetPartMetadata(partType)
+	if not metadata or amount <= 0 or amount % 1 ~= 0 then return false end
+	local canonical = metadata.Id
+	if self:GetCount(userId, canonical) < amount then return false end
 	local record = ledger(self, userId)
-	local stacked = tonumber(record.Stacks[partType]) or 0
+	local stacked = tonumber(record.Stacks[canonical]) or 0
 	local fromStack = math.min(stacked, amount)
 	local neededUnique = amount - fromStack
 	local ids = {}
 	if neededUnique > 0 then
-		for id, item in pairs(record.Unique) do
-			if item.PartType == partType then table.insert(ids, id) end
-		end
+		for id, item in pairs(record.Unique) do if item.PartType == canonical then table.insert(ids, id) end end
 		table.sort(ids)
 		if #ids < neededUnique then return false end
 	end
-
-	if fromStack > 0 then record.Stacks[partType] = stacked - fromStack end
+	if fromStack > 0 then record.Stacks[canonical] = stacked - fromStack end
 	for index = 1, neededUnique do record.Unique[ids[index]] = nil end
 	bump(record)
 	return true
@@ -205,44 +185,42 @@ function Inventory:ApplyTransactionOnce(userId: number, transactionId: string, c
 	return true
 end
 
-function Inventory:Snapshot(userId: number): any
-	return clone(ledger(self, userId))
-end
+function Inventory:Snapshot(userId: number): any return clone(ledger(self, userId)) end
 
 function Inventory:Restore(userId: number, snapshot: any)
 	local restored = freshRecord()
-	if type(snapshot) ~= "table" then
-		self._players[userId] = restored
-		return
-	end
+	if type(snapshot) ~= "table" then self._players[userId] = restored; return end
 
 	if snapshot.Stacks or snapshot.Unique or snapshot.Materials then
 		for partType, amount in pairs(snapshot.Stacks or {}) do
-			if self:GetPartMetadata(partType) and type(amount) == "number" and amount >= 0 and amount % 1 == 0 then
-				restored.Stacks[partType] = amount
+			local metadata = if type(partType) == "string" then self:GetPartMetadata(partType) else nil
+			if metadata and type(amount) == "number" and amount >= 0 and amount % 1 == 0 then
+				restored.Stacks[metadata.Id] = (restored.Stacks[metadata.Id] or 0) + amount
 			end
 		end
 		for id, item in pairs(snapshot.Unique or {}) do
-			if type(item) == "table" and type(item.PartType) == "string" and self:GetPartMetadata(item.PartType) then
-				restored.Unique[id] = clone(item)
+			local metadata = if type(item) == "table" and type(item.PartType) == "string" then self:GetPartMetadata(item.PartType) else nil
+			if metadata then
+				local migrated = clone(item)
+				migrated.PartType = metadata.Id
+				migrated.MaxDurability = tonumber(migrated.MaxDurability) or metadata.MaxDurability
+				migrated.Durability = math.clamp(tonumber(migrated.Durability) or migrated.MaxDurability, 0, migrated.MaxDurability)
+				restored.Unique[id] = migrated
 			end
 		end
 		restored.Materials = clone(snapshot.Materials or {})
 		restored.Revision = tonumber(snapshot.Revision) or 0
 		restored.AppliedTransactions = clone(snapshot.AppliedTransactions or {})
 	else
-		-- Legacy {[partType]: count} snapshots.
 		for partType, amount in pairs(snapshot) do
-			if type(partType) == "string" and self:GetPartMetadata(partType) and type(amount) == "number" and amount >= 0 and amount % 1 == 0 then
-				restored.Stacks[partType] = amount
+			local metadata = if type(partType) == "string" then self:GetPartMetadata(partType) else nil
+			if metadata and type(amount) == "number" and amount >= 0 and amount % 1 == 0 then
+				restored.Stacks[metadata.Id] = (restored.Stacks[metadata.Id] or 0) + amount
 			end
 		end
 	end
 	self._players[userId] = restored
 end
 
-function Inventory:RemovePlayer(userId: number)
-	self._players[userId] = nil
-end
-
+function Inventory:RemovePlayer(userId: number) self._players[userId] = nil end
 return Inventory
