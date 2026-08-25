@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repository-level invariants for GOD MACHINES Masterpiece Builder V2.
+"""Repository-level invariants for GOD MACHINES Masterpiece Builder.
 
 This deliberately avoids Roblox runtime assumptions. It catches structural regressions,
 stale three-part architecture, remote ownership conflicts, catalog drift, profile/save
@@ -39,8 +39,9 @@ def strip_luau_comments(source: str) -> str:
 
 
 PART_DIR = ROOT / "src/ReplicatedStorage/MechFramework/Shared/PartDefinitions"
-EXPECTED_CATEGORIES = {
+EXPECTED_MODULES = {
     "Structural.luau",
+    "StructuralBasics.luau",
     "Armour.luau",
     "Mobility.luau",
     "Propulsion.luau",
@@ -64,21 +65,24 @@ if project_path.is_file():
     except Exception as exc:
         ERRORS.append(f"default.project.json could not be parsed: {exc}")
 
-# Catalog source: exactly nine category modules and exactly 100 unique H.part definitions.
+# Catalog source: known declarative modules and at least 100 unique H.part definitions.
 check(PART_DIR.is_dir(), "PartDefinitions directory is missing")
 part_ids: list[str] = []
 if PART_DIR.is_dir():
     module_names = {p.name for p in PART_DIR.glob("*.luau")}
-    check(module_names == EXPECTED_CATEGORIES, f"PartDefinitions modules differ from expected set: {sorted(module_names)}")
-    for filename in sorted(EXPECTED_CATEGORIES):
+    check(module_names == EXPECTED_MODULES, f"PartDefinitions modules differ from expected set: {sorted(module_names)}")
+    for filename in sorted(EXPECTED_MODULES):
         source = strip_luau_comments((PART_DIR / filename).read_text(encoding="utf-8"))
         ids = re.findall(r'\bH\.part\s*\(\s*["\']([^"\']+)["\']', source)
         check(len(ids) > 0, f"{filename} contains no H.part definitions")
         part_ids.extend(ids)
-check(len(part_ids) == 100, f"expected exactly 100 H.part definitions, found {len(part_ids)}")
+check(len(part_ids) >= 100, f"expected at least 100 H.part definitions, found {len(part_ids)}")
 check(len(set(part_ids)) == len(part_ids), "duplicate part IDs exist in category definitions")
-for canonical in ("StructuralFrame", "SmallReactor", "Autocannon"):
-    check(canonical in set(part_ids), f"canonical legacy part missing from 100-part catalog: {canonical}")
+for canonical in (
+    "StructuralFrame", "SmallReactor", "Autocannon", "StudBlock", "HalfStudBlock",
+    "LongStudBeam", "StructuralPlate", "CornerBlock", "TriangularBlock", "RoundStructuralCell",
+):
+    check(canonical in set(part_ids), f"required part missing from catalog definitions: {canonical}")
 
 catalog = text("src/ReplicatedStorage/MechFramework/Shared/PartCatalog.luau")
 helpers = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinitionHelpers.luau")
@@ -88,15 +92,16 @@ ui = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildUI.lua
 controller = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau")
 weapon_client = text("src/StarterPlayer/StarterPlayerScripts/WeaponController.client.luau")
 
-check("#ordered == 100" in catalog and "Catalog.Validate" in catalog, "PartCatalog lost exact-count/runtime validation")
+check("#ordered >= 100" in catalog and "Catalog.Validate" in catalog, "PartCatalog lost minimum-count/runtime validation")
+check("REQUIRED_IDS" in catalog and "StudBlock" in catalog, "PartCatalog lost required baseline IDs")
 check("VALID_GEOMETRY_KINDS" in catalog and "WeaponDefinitions" in catalog, "PartCatalog lost geometry/weapon validation")
 check("function H.part" in helpers and "VALID_CATEGORIES" in helpers, "part constructor normalization is missing")
-check('H.node("Left",kind,CFrame.new(-size.X/2,0,0)*CFrame.Angles(0,math.pi/2,0),accepts)' in helpers, "left box node must face outward (-X surface normal)")
-check('H.node("Right",kind,CFrame.new(size.X/2,0,0)*CFrame.Angles(0,-math.pi/2,0),accepts)' in helpers, "right box node must face outward (+X surface normal)")
+check('faceTransform(size,"Left",0,0)' in helpers, "left box node must use canonical outward face transform")
+check('faceTransform(size,"Right",0,0)' in helpers, "right box node must use canonical outward face transform")
 check('(extra.Category or "Structural")' in helpers, "legacy compact Structural definitions must receive a Structural category fallback")
 check("function Renderer.Render" in renderer and "BuildMath.AttachmentNodes" in renderer, "shared renderer is not using canonical nodes")
 check("PartRenderer.Render" in preview and "function BuildPreview:SetMirror" in preview, "preview is not on shared renderer/true mirror path")
-check("PartCatalog.GetList()" in controller and "assert(#catalog == 100" in controller, "client is not driven by the 100-part catalog")
+check("PartCatalog.GetList()" in controller and "#catalog >= 100" in controller, "client is not driven by an expansion-safe catalog")
 check("local PARTS" not in controller, "old hardcoded client PARTS table returned")
 check("SetInventoryCounts" in ui and 'Action="Inventory"' in controller, "live buildable inventory UI is not wired")
 
@@ -186,4 +191,4 @@ if ERRORS:
     sys.exit(1)
 
 print(f"MASTERPIECE VERIFICATION PASSED: {CHECKS} checks")
-print(f"Catalog definitions: {len(part_ids)} unique parts across {len(EXPECTED_CATEGORIES)} categories")
+print(f"Catalog definitions: {len(part_ids)} unique parts across {len(EXPECTED_MODULES)} definition modules")
