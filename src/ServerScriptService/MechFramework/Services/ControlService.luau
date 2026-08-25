@@ -36,6 +36,15 @@ local function pilotAuthorized(userId: number, mechId: string): boolean
 	return model ~= nil and model:IsA("Model") and model:GetAttribute("EditMode") == false and model:GetAttribute("PilotUserId") == userId
 end
 
+local function blueprintSourceMap(mech: any): {[string]: string}
+	local out: {[string]: string} = {}
+	for runtimeId, component in pairs(mech.Components or {}) do
+		local sourceId = component.Metadata and component.Metadata.BlueprintSourceId
+		if type(sourceId) == "string" and sourceId ~= "" and out[sourceId] == nil then out[sourceId] = runtimeId end
+	end
+	return out
+end
+
 function Control:Init(container: any)
 	self._mechs = container:Get("MechService")
 	self._combat = container:Get("CombatService")
@@ -43,16 +52,21 @@ function Control:Init(container: any)
 end
 
 function Control:SetBindings(userId: number, mechId: string, groups: {[string]: {string}}, custom: boolean?): boolean
-	if not self._mechs:IsOwner(userId, mechId) then return false end
+	local mech = self._mechs:Get(mechId)
+	if not mech or mech.Owner ~= userId then return false end
+	local sourceMap = blueprintSourceMap(mech)
 	local clean = {}
 	for action, ids in pairs(groups) do
 		if VALID_ACTIONS[action] and type(ids) == "table" then
 			clean[action] = {}
 			local seen = {}
 			for _, id in ipairs(ids) do
-				if type(id) == "string" and #id <= 80 and not seen[id] and self._mechs:GetComponent(mechId, id) then
-					seen[id] = true
-					table.insert(clean[action], id)
+				if type(id) == "string" and #id <= 80 then
+					local runtimeId = if mech.Components[id] then id else sourceMap[id]
+					if runtimeId and not seen[runtimeId] and mech.Components[runtimeId] then
+						seen[runtimeId] = true
+						table.insert(clean[action], runtimeId)
+					end
 				end
 			end
 		end
