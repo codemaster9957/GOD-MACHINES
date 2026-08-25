@@ -1,12 +1,13 @@
 --!strict
 -- Unified keyboard/mouse adapter for GOD MACHINES abstract control actions.
--- Physical inputs can dispatch multiple semantic actions; the server only activates components bound to them.
+-- Physical inputs can dispatch multiple semantic actions; only components bound to an action react.
 
 local Players = game:GetService("Players")
 local ContextActionService = game:GetService("ContextActionService")
 
 local player = Players.LocalPlayer
 local remote = game.ReplicatedStorage.MechFramework.Remotes.Events.RequestControlAction
+assert(remote:IsA("RemoteEvent"), "[GOD MACHINES] RequestControlAction must be RemoteEvent")
 
 local sequence = 0
 local heldActions: {[string]: boolean} = {}
@@ -17,8 +18,10 @@ local PHYSICAL_BINDINGS = {
 	{ Name="Secondary", Inputs={Enum.UserInputType.MouseButton2}, Actions={"Secondary"} },
 	{ Name="Forward", Inputs={Enum.KeyCode.W}, Actions={"ThrottleForward"} },
 	{ Name="Reverse", Inputs={Enum.KeyCode.S}, Actions={"ThrottleReverse"} },
-	{ Name="Left", Inputs={Enum.KeyCode.A}, Actions={"SteerLeft","RollLeft"} },
-	{ Name="Right", Inputs={Enum.KeyCode.D}, Actions={"SteerRight","RollRight"} },
+	-- A/D simultaneously express car steering, aircraft roll and omni-wheel strafe.
+	-- The server's generated/custom groups decide which components actually react.
+	{ Name="Left", Inputs={Enum.KeyCode.A}, Actions={"SteerLeft","RollLeft","StrafeLeft"} },
+	{ Name="Right", Inputs={Enum.KeyCode.D}, Actions={"SteerRight","RollRight","StrafeRight"} },
 	-- Space serves car brakes and lift simultaneously; only bound components react.
 	{ Name="BrakeRise", Inputs={Enum.KeyCode.Space}, Actions={"Brake","VerticalUp"} },
 	{ Name="Descend", Inputs={Enum.KeyCode.LeftControl}, Actions={"VerticalDown"} },
