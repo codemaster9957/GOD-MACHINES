@@ -1,5 +1,7 @@
 --!strict
 -- Reliable session persistence: UpdateAsync locking, retries, autosave, migrations, and shutdown flush.
+-- Studio debug sessions intentionally stay local so development does not depend on API Services being enabled.
+
 local Players = game:GetService("Players")
 local DataStoreService = game:GetService("DataStoreService")
 local RunService = game:GetService("RunService")
@@ -116,8 +118,35 @@ function Save:_grantStudioBuildInventory(userId: number)
 	print("[MechFramework] Granted Studio test build inventory", userId)
 end
 
-function Save:_load(player: Player)
+function Save:_loadStudio(player: Player)
 	local userId = player.UserId
+	if self._sessions[userId] then
+		return
+	end
+
+	self._sessions[userId] = {
+		Id = "StudioLocal:" .. tostring(userId),
+		Key = "",
+		LastSave = os.clock(),
+		LocalOnly = true,
+	}
+	self._inventory:Restore(userId, {})
+	self._blueprints[userId] = {}
+	self:_grantStudioBuildInventory(userId)
+	print("[MechFramework] Studio local save session ready", userId)
+end
+
+function Save:_load(player: Player)
+	if RunService:IsStudio() and Config.Debug then
+		self:_loadStudio(player)
+		return
+	end
+
+	local userId = player.UserId
+	if self._sessions[userId] then
+		return
+	end
+
 	local sessionId = HttpService:GenerateGUID(false)
 	local key = "Player_" .. userId
 	local now = os.time()
@@ -142,15 +171,21 @@ function Save:_load(player: Player)
 	end)
 
 	if not ok or not acquired or type(record) ~= "table" then
+		warn("[MechFramework] Failed to acquire save session", userId, record)
 		player:Kick("Inventory session could not be loaded safely. Please rejoin.")
 		return
 	end
 
 	record = self:Migrate(record)
-	self._sessions[userId] = { Id = sessionId, Key = key, LastSave = os.clock() }
+	self._sessions[userId] = { Id = sessionId, Key = key, LastSave = os.clock(), LocalOnly = false }
 	self._inventory:Restore(userId, record.Inventory or {})
 	self._blueprints[userId] = clone(record.Blueprints or {})
-	self:_grantStudioBuildInventory(userId)
+end
+
+function Save:_releaseLocal(userId: number)
+	self._sessions[userId] = nil
+	self._inventory:RemovePlayer(userId)
+	self._blueprints[userId] = nil
 end
 
 function Save:_save(userId: number, release: boolean): boolean
@@ -158,8 +193,17 @@ function Save:_save(userId: number, release: boolean): boolean
 	if not session then
 		return true
 	end
+
+	if session.LocalOnly == true then
+		session.LastSave = os.clock()
+		if release then
+			self:_releaseLocal(userId)
+		end
+		return true
+	end
+
 	local payload = self:BuildPlayerRecord(userId)
-	local ok = retry(function()
+	local ok, result = retry(function()
 		return store:UpdateAsync(session.Key, function(old: any)
 			if type(old) == "table" and old.Session and old.Session.Id ~= session.Id then
 				return nil
@@ -168,29 +212,39 @@ function Save:_save(userId: number, release: boolean): boolean
 			return payload
 		end)
 	end)
+
 	if ok then
 		session.LastSave = os.clock()
+	elseif result then
+		warn("[MechFramework] Save failed", userId, result)
 	end
+
 	if release and ok then
 		self._sessions[userId] = nil
 		self._inventory:RemovePlayer(userId)
 		self._blueprints[userId] = nil
 	end
+
 	return ok
 end
 
 function Save:Start()
 	Players.PlayerAdded:Connect(function(player)
-		self:_load(player)
+		task.spawn(function()
+			self:_load(player)
+		end)
 	end)
+
 	Players.PlayerRemoving:Connect(function(player)
 		self:_save(player.UserId, true)
 	end)
+
 	for _, player in ipairs(Players:GetPlayers()) do
 		task.spawn(function()
 			self:_load(player)
 		end)
 	end
+
 	task.spawn(function()
 		while not self._closing do
 			task.wait(10)
@@ -203,11 +257,13 @@ function Save:Start()
 			end
 		end
 	end)
+
 	game:BindToClose(function()
 		self._closing = true
 		if RunService:IsStudio() then
 			return
 		end
+
 		local pending = 0
 		for userId in pairs(self._sessions) do
 			pending += 1
@@ -216,6 +272,7 @@ function Save:Start()
 				pending -= 1
 			end)
 		end
+
 		local deadline = os.clock() + 25
 		while pending > 0 and os.clock() < deadline do
 			task.wait(0.1)

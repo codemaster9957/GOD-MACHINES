@@ -1,6 +1,6 @@
--- ROJO TEST
 --!strict
 -- Composition root: register every service before the two-phase lifecycle.
+
 local root = script.Parent
 local Container = require(root.ServiceContainer)
 local services = root.Services
@@ -28,8 +28,10 @@ local order = {
 }
 
 for _, name in ipairs(order) do
+	local module = services:WaitForChild(name)
+	assert(module:IsA("ModuleScript"), `[MechFramework] {name} must be a ModuleScript`)
 	print("[MechFramework] Registering", name)
-	container:Register(name, require(services:WaitForChild(name)))
+	container:Register(name, require(module))
 end
 
 print("[MechFramework] Initializing services")
