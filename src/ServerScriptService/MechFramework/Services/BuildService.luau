@@ -114,11 +114,14 @@ function Build:_rollbackAdded(mech,componentId,userId,partType)
 	self._inventory:Grant(userId,partType,1); self._mechs:MarkChanged(mech.Id)
 end
 
-function Build:_place(player,request)
+function Build:_place(player,request,appearance)
 	local userId=player.UserId
 	if type(request.PartType)~="string" then return false,"BadPartType" end
 	local definition=self._parts:Get(request.PartType); if not definition then return false,"UnknownPartType" end
-	local partType=definition.Id; local mirrorX=request.MirrorX==true
+	local partType=definition.Id
+	local mirrorX=if request.MirrorX~=nil then request.MirrorX==true else type(appearance)=="table" and appearance.MirrorX==true
+	local paint=definition.PaintDefaults or {}
+	if type(appearance)=="table" and type(appearance.Paint)=="table" then paint=appearance.Paint end
 	local mechId=request.MechId
 	if mechId~=nil and type(mechId)~="string" then return false,"BadMechId" end
 	if not mechId then mechId=self._mechs:Create(userId,{BuildOrigin=true}) end
@@ -144,7 +147,7 @@ function Build:_place(player,request)
 
 	local nodes=BuildMath.AttachmentNodes(definition,mirrorX); for _,node in pairs(nodes) do node.OccupiedBy=nil end
 	local added,componentId=self._mechs:AddComponent(mechId,userId,partType,transform,{
-		AttachmentNodes=nodes,Paint=clone(definition.PaintDefaults or {}),MirrorX=mirrorX,
+		AttachmentNodes=nodes,Paint=clone(paint),MirrorX=mirrorX,
 	})
 	if not added then self._inventory:Grant(userId,partType,1); return false,componentId end
 
@@ -159,7 +162,7 @@ function Build:_place(player,request)
 		if not attached then actualTargetNode.OccupiedBy=nil; actualSourceNode.OccupiedBy=nil; self:_rollbackAdded(mech,componentId,userId,partType); return false,edge end
 	end
 	self:_record(userId,mechId,before); self:_realize(mechId)
-	return true,{MechId=mechId,ComponentId=componentId,Revision=mech.Revision,MirrorX=mirrorX}
+	return true,{MechId=mechId,ComponentId=componentId,Revision=mech.Revision,MirrorX=mirrorX,Paint=clone(paint)}
 end
 
 function Build:_remove(player,request)
@@ -214,13 +217,29 @@ function Build:_paint(player,request)
 	return true,{Paint=clone(component.Metadata.Paint),Revision=mech.Revision}
 end
 
+function Build:_appearance(player,request)
+	if type(request.MechId)~="string" or type(request.ComponentId)~="string" then return false,"BadAppearanceRequest" end
+	local mech=self._mechs:Get(request.MechId); if not mech or mech.Owner~=player.UserId then return false,"NotAuthorized" end
+	local source=mech.Components[request.ComponentId]; if not source or source.Destroyed then return false,"InvalidComponent" end
+	local definition=self._parts:Get(source.PartType); if not definition then return false,"UnknownPartType" end
+	return true,{
+		PartType=definition.Id,
+		Paint=clone(source.Metadata and source.Metadata.Paint or definition.PaintDefaults or {}),
+		MirrorX=source.Metadata and source.Metadata.MirrorX==true,
+	}
+end
+
 function Build:_duplicate(player,request)
 	if type(request.MechId)~="string" or type(request.ComponentId)~="string" then return false,"BadDuplicateRequest" end
 	local mech=self._mechs:Get(request.MechId); if not mech or mech.Owner~=player.UserId then return false,"NotAuthorized" end
-	local source=mech.Components[request.ComponentId]; if not source then return false,"InvalidComponent" end
-	request.PartType=source.PartType
-	if request.MirrorX==nil then request.MirrorX=source.Metadata and source.Metadata.MirrorX==true end
-	return self:_place(player,request)
+	local source=mech.Components[request.ComponentId]; if not source or source.Destroyed then return false,"InvalidComponent" end
+	local definition=self._parts:Get(source.PartType); if not definition then return false,"UnknownPartType" end
+	request.PartType=definition.Id
+	local appearance={
+		Paint=clone(source.Metadata and source.Metadata.Paint or definition.PaintDefaults or {}),
+		MirrorX=source.Metadata and source.Metadata.MirrorX==true,
+	}
+	return self:_place(player,request,appearance)
 end
 
 function Build:_summary(player,request)
@@ -253,6 +272,7 @@ function Build:Start()
 	remote.OnServerInvoke=function(player,request)
 		local action=type(request)=="table" and request.Action or nil; if type(request)~="table" or type(action)~="string" then return false,"BadRequest" end
 		if action=="Definition" then if type(request.PartType)~="string" then return false,"BadPartType" end; local definition=self._parts:Get(request.PartType); return definition~=nil,definition
+		elseif action=="Appearance" then return self:_appearance(player,request)
 		elseif action=="Place" then return self:_place(player,request)
 		elseif action=="Remove" then return self:_remove(player,request)
 		elseif action=="Move" then return self:_move(player,request)
@@ -285,7 +305,11 @@ local function sanitizedMetadata(sourceMetadata,definition)
 	meta.AttachmentNodes=BuildMath.AttachmentNodes(definition,mirrorX)
 	for _,node in pairs(meta.AttachmentNodes) do node.OccupiedBy=nil end
 	meta.Paint=clone(meta.Paint or definition.PaintDefaults or {})
-	meta.ControlState={}; meta.PowerFraction=1; meta.PropulsionFraction=0
+	meta.ControlState={}
+	meta.PowerFraction=nil
+	meta.PowerState=nil
+	meta.FuelFraction=nil
+	meta.PropulsionFraction=0
 	meta.Temperature=nil; meta.HeatEfficiency=nil; meta.Overheated=nil; meta.ThermalState=nil; meta.Jammed=nil
 	meta.DamageState=nil; meta.LastDamage=nil; meta.Operational=true; meta.Detached=nil; meta.DestroyedAt=nil
 	return meta
