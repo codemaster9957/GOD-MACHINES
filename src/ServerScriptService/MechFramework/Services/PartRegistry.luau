@@ -1,6 +1,9 @@
 --!strict
 -- Immutable GOD MACHINES build-part registry.
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local WeaponCatalog = require(ReplicatedStorage.MechFramework.Shared.WeaponCatalog)
+
 local Registry: any = {
 	_definitions = {} :: {[string]: any},
 }
@@ -97,6 +100,12 @@ function Registry:Init()
 			Density = 1,
 			StructuralStrength = 400,
 		},
+		Visual = {
+			Shape = "Block",
+			Material = "Metal",
+			BaseColor = Color3.fromRGB(92, 99, 106),
+			AccentColor = Color3.fromRGB(255, 181, 54),
+		},
 	})
 
 	local reactorSize = Vector3.new(3, 3, 3)
@@ -117,32 +126,32 @@ function Registry:Init()
 			Generation = 8,
 			Capacity = 200,
 		},
+		Visual = {
+			Shape = "Ball",
+			Material = "Neon",
+			BaseColor = Color3.fromRGB(43, 214, 255),
+			AccentColor = Color3.fromRGB(232, 240, 245),
+		},
 	})
 
-	local gunSize = Vector3.new(2, 2, 5)
-	self:Register("Autocannon", {
-		Size = gunSize,
-		Mass = 55,
-		MaxHealth = 120,
-		AttachmentNodes = boxNodes(gunSize, "Weapon"),
-		PhysicalProperties = {
-			Density = 1.5,
-			StructuralStrength = 150,
-		},
-		Power = {
-			Generation = 0,
-			Demand = 15,
-		},
-		Heat = {
-			Generation = 12,
-			Capacity = 80,
-		},
-		Combat = {
-			Preset = "Autocannon",
-			Damage = 20,
-			Range = 1200,
-		},
-	})
+	for _, weaponDefinition in ipairs(WeaponCatalog.Ordered) do
+		local size = weaponDefinition.Size
+		self:Register(weaponDefinition.Id, {
+			Size = size,
+			Mass = weaponDefinition.Mass,
+			MaxHealth = weaponDefinition.MaxHealth,
+			AttachmentNodes = boxNodes(size, "Weapon"),
+			PhysicalProperties = {
+				Density = math.clamp(weaponDefinition.Mass / math.max(1, size.X * size.Y * size.Z), 0.5, 5),
+				StructuralStrength = math.max(100, weaponDefinition.MaxHealth),
+			},
+			Power = clone(weaponDefinition.Power),
+			Heat = clone(weaponDefinition.Heat),
+			Combat = clone(weaponDefinition.Combat),
+			Visual = clone(weaponDefinition.Visual),
+			MountRole = weaponDefinition.MountRole,
+		})
+	end
 end
 
 return Registry
