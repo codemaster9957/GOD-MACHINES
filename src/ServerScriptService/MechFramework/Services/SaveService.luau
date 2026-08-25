@@ -127,6 +127,19 @@ function Save:_loadStudio(player:Player)
 	self._sessions[userId]={Id="StudioLocal:"..tostring(userId),Key="",LastSave=os.clock(),LocalOnly=true}; self._inventory:Restore(userId,{}); self._blueprints[userId]={}
 	self:_grantStudioBuildInventory(userId); print("[MechFramework] Studio local save session ready",userId)
 end
+
+function Save:_releaseRemoteLock(key:string,sessionId:string)
+	local ok,result=retry(function()
+		return store:UpdateAsync(key,function(old:any)
+			if type(old)~="table" then return old end
+			local session=old.Session
+			if session and session.Id==sessionId then old.Session=nil; return old end
+			return nil
+		end)
+	end)
+	if not ok then warn("[MechFramework] Failed to release abandoned save lock",key,result) end
+end
+
 function Save:_load(player:Player)
 	if RunService:IsStudio() and Config.Debug then self:_loadStudio(player); return end
 	local userId=player.UserId; if self._sessions[userId] then return end
@@ -140,8 +153,21 @@ function Save:_load(player:Player)
 	end)
 	if not ok or not acquired or type(record)~="table" then warn("[MechFramework] Failed to acquire save session",userId,record); player:Kick("Inventory session could not be loaded safely. Please rejoin."); return end
 	local decodedOk,decodedRecord=pcall(decode,record)
-	if not decodedOk or type(decodedRecord)~="table" then warn("[MechFramework] Saved record decode failed",userId,decodedRecord); player:Kick("Saved machine data could not be decoded safely. Please rejoin."); return end
-	record=self:Migrate(decodedRecord); self._sessions[userId]={Id=sessionId,Key=key,LastSave=os.clock(),LocalOnly=false}
+	if not decodedOk or type(decodedRecord)~="table" then
+		warn("[MechFramework] Saved record decode failed",userId,decodedRecord)
+		task.spawn(function() self:_releaseRemoteLock(key,sessionId) end)
+		player:Kick("Saved machine data could not be decoded safely. Please rejoin.")
+		return
+	end
+	local migrationOk,migratedRecord=pcall(function() return self:Migrate(decodedRecord) end)
+	if not migrationOk or type(migratedRecord)~="table" then
+		warn("[MechFramework] Saved record migration failed",userId,migratedRecord)
+		task.spawn(function() self:_releaseRemoteLock(key,sessionId) end)
+		player:Kick("Saved machine data could not be migrated safely. Please rejoin.")
+		return
+	end
+	record=migratedRecord
+	self._sessions[userId]={Id=sessionId,Key=key,LastSave=os.clock(),LocalOnly=false}
 	self._inventory:Restore(userId,record.Inventory or {}); self._blueprints[userId]=clone(record.Blueprints or {})
 end
 function Save:_releaseLocal(userId:number) self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end
@@ -150,14 +176,25 @@ function Save:_save(userId:number,release:boolean):boolean
 	if session.LocalOnly==true then session.LastSave=os.clock(); if release then self:_releaseLocal(userId) end; return true end
 	local encodeOk,payload=pcall(encode,self:BuildPlayerRecord(userId))
 	if not encodeOk or type(payload)~="table" then warn("[MechFramework] Save encode failed",userId,payload); return false end
+	local wrote=false
 	local ok,result=retry(function()
 		return store:UpdateAsync(session.Key,function(old:any)
 			if type(old)=="table" and old.Session and old.Session.Id~=session.Id then return nil end
-			payload.Session=if release then nil else {Id=session.Id,Heartbeat=os.time()}; return payload
+			wrote=true
+			payload.Session=if release then nil else {Id=session.Id,Heartbeat=os.time()}
+			return payload
 		end)
 	end)
-	if ok then session.LastSave=os.clock() elseif result then warn("[MechFramework] Save failed",userId,result) end
-	if release and ok then self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end; return ok
+	local committed=ok and wrote and type(result)=="table"
+	if committed then
+		session.LastSave=os.clock()
+	elseif ok and not wrote then
+		warn("[MechFramework] Save ownership lost before write",userId)
+	else
+		warn("[MechFramework] Save failed",userId,result)
+	end
+	if release and committed then self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end
+	return committed
 end
 function Save:Start()
 	Players.PlayerAdded:Connect(function(player) task.spawn(function() self:_load(player) end) end)
