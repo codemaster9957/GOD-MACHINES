@@ -47,6 +47,65 @@ local function clone(value)
 	return out
 end
 
+local function applyVisual(part, definition)
+	local visual = definition.Visual
+	if type(visual) ~= "table" then
+		part.Material = Enum.Material.Metal
+		part.Color = Color3.fromRGB(92, 99, 106)
+		return
+	end
+
+	local material = Enum.Material[tostring(visual.Material or "Metal")]
+	if material then
+		part.Material = material
+	end
+
+	local shape = Enum.PartType[tostring(visual.Shape or "Block")]
+	if shape then
+		part.Shape = shape
+	end
+
+	if typeof(visual.BaseColor) == "Color3" then
+		part.Color = visual.BaseColor
+	end
+end
+
+local function addWeaponDetails(part, definition)
+	local visual = definition.Visual
+	if type(visual) ~= "table" or type(definition.Combat) ~= "table" then
+		return
+	end
+
+	local accent = Instance.new("Part")
+	accent.Name = "WeaponAccent"
+	accent.Size = Vector3.new(
+		math.max(0.18, part.Size.X * 0.72),
+		math.max(0.12, part.Size.Y * 0.14),
+		math.max(0.25, part.Size.Z * 0.72)
+	)
+	accent.CFrame = part.CFrame * CFrame.new(0, part.Size.Y * 0.3, 0)
+	accent.Material = Enum.Material.Neon
+	accent.Color = if typeof(visual.AccentColor) == "Color3" then visual.AccentColor else Color3.fromRGB(255, 181, 54)
+	accent.Anchored = part.Anchored
+	accent.CanCollide = false
+	accent.CanQuery = false
+	accent.CanTouch = false
+	accent.Massless = true
+	accent.Parent = part
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "AccentWeld"
+	weld.Part0 = part
+	weld.Part1 = accent
+	weld.Parent = accent
+
+	local muzzle = Instance.new("Attachment")
+	muzzle.Name = "Muzzle"
+	muzzle.CFrame = CFrame.new(0, 0, -part.Size.Z / 2)
+	muzzle:SetAttribute("EffectColor", if typeof(visual.MuzzleColor) == "Color3" then visual.MuzzleColor else accent.Color)
+	muzzle.Parent = part
+end
+
 --------------------------------------------------
 -- HISTORY STACKS
 --------------------------------------------------
@@ -222,6 +281,7 @@ function Build:_realize(mechId)
 
 		part.Anchored = true
 		part.CanCollide = true
+		applyVisual(part, definition)
 
 		part:SetAttribute(
 			"MechId",
@@ -239,6 +299,7 @@ function Build:_realize(mechId)
 		)
 
 		part.Parent = model
+		addWeaponDetails(part, definition)
 
 		physical[id] = part
 
