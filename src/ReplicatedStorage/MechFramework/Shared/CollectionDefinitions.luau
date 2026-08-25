@@ -1,6 +1,6 @@
 --!strict
 -- Data-only collection content. Rarity describes scarcity/specialisation, not power.
-local Definitions = {}
+local WeaponCatalog = require(script.Parent.WeaponCatalog)\n\nlocal Definitions = {}
 
 Definitions.Rarities = table.freeze({
 	Common = { Scarcity = 1, TradeLabel = "Industrial" },
@@ -26,14 +26,25 @@ Definitions.Materials = table.freeze({
 })
 
 -- Stackable=false means each acquired part receives its own identity and condition.
-Definitions.Parts = table.freeze({
+local parts = {
 	StructuralFrame = { Category = "StructuralFrames", Rarity = "Common", Stackable = true, MaxDurability = 250 },
 	SmallReactor = { Category = "Generators", Rarity = "Uncommon", Stackable = false, MaxDurability = 180 },
-	Autocannon = { Category = "Weapons", Rarity = "Uncommon", Stackable = false, MaxDurability = 120 },
 	LightweightEngine = { Category = "Engines", Rarity = "Common", Stackable = false, MaxDurability = 140, Tags = { "Lightweight", "Efficient" } },
 	CompositePlate = { Category = "Armour", Rarity = "Rare", Stackable = false, MaxDurability = 320 },
 	PrototypeThruster = { Category = "ExperimentalParts", Rarity = "Experimental", Stackable = false, MaxDurability = 90 },
-})
+}
+
+for _, weapon in ipairs(WeaponCatalog.Ordered) do
+	parts[weapon.Id] = {
+		Category = "Weapons",
+		Rarity = weapon.Collection.Rarity,
+		Stackable = false,
+		MaxDurability = weapon.Collection.MaxDurability,
+		Tags = { weapon.MountRole, weapon.Combat.Category },
+	}
+end
+
+Definitions.Parts = table.freeze(parts)
 
 Definitions.Recipes = table.freeze({
 	StructuralFrame = { Output = { Kind = "Part", Id = "StructuralFrame", Amount = 1 }, Costs = { ScrapMetal = 12, Steel = 6 } },
