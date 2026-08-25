@@ -1,5 +1,5 @@
 --!nonstrict
--- GOD MACHINES Workshop V2 client orchestration. Server remains authoritative for every mutation.
+-- GOD MACHINES Workshop V3 client orchestration. Server remains authoritative for every mutation.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,6 +15,8 @@ local BuildUI = require(script.Parent:WaitForChild("BuildUI"))
 local BuildPreview = require(script.Parent:WaitForChild("BuildPreview"))
 local BuildInput = require(script.Parent:WaitForChild("BuildInput"))
 local NodeVisualizer = require(script.Parent:WaitForChild("NodeVisualizer"))
+local WorkshopCamera = require(script.Parent:WaitForChild("WorkshopCamera"))
+local WorkshopCameraBar = require(script.Parent:WaitForChild("WorkshopCameraBar"))
 
 local framework = ReplicatedStorage:WaitForChild("MechFramework")
 local Shared = framework:WaitForChild("Shared")
@@ -49,6 +51,9 @@ local duplicateSourceId = nil
 local ui = BuildUI.new(playerGui, {})
 local preview = BuildPreview.new(mouse, BuildMath)
 local nodes = NodeVisualizer.new()
+local workshopCamera = WorkshopCamera.new(UserInputService, RunService)
+local cameraCallbacks = {}
+local cameraBar = WorkshopCameraBar.new(ui.Root, cameraCallbacks)
 
 local function status(text, tone, duration)
 	ui:SetStatus(text, tone)
@@ -127,6 +132,7 @@ local function setActiveMech(value, fromAttribute)
 		player:SetAttribute("ActiveMechId", normalized)
 	end
 	nodes:SetMech(normalized)
+	workshopCamera:SetMech(normalized)
 	if not normalized then
 		ui:SetEngineeringSummary(nil)
 		currentBindings = {}
@@ -136,11 +142,17 @@ end
 local function componentFromTarget()
 	local target = mouse.Target
 	if not target then return nil, nil, nil end
-	local componentId = target:GetAttribute("ComponentId")
-	local targetMechId = target:GetAttribute("MechId")
-	local partType = target:GetAttribute("PartType")
-	if type(componentId) ~= "string" or type(targetMechId) ~= "string" then return nil, nil, nil end
-	return targetMechId, componentId, if type(partType) == "string" then partType else nil
+	local current = target
+	while current and current ~= workspace do
+		local componentId = current:GetAttribute("ComponentId")
+		local targetMechId = current:GetAttribute("MechId")
+		local partType = current:GetAttribute("PartType")
+		if type(componentId) == "string" and type(targetMechId) == "string" then
+			return targetMechId, componentId, if type(partType) == "string" then partType else nil
+		end
+		current = current.Parent
+	end
+	return nil, nil, nil
 end
 
 local function selectPart(partType, preserveDuplicate)
@@ -156,18 +168,22 @@ local function selectPart(partType, preserveDuplicate)
 	return true
 end
 
-local function setBuildVisible(enabled)
+local function setBuildVisible(enabled, cameraReason)
 	buildMode = enabled == true
 	player:SetAttribute("BuildMode", buildMode)
 	ui:SetBuildMode(buildMode)
 	preview:SetEnabled(buildMode)
 	nodes:SetEnabled(buildMode and ui.NodeVisible)
+	cameraBar:SetVisible(buildMode)
 	if input then input:SetActive(buildMode) end
 	if buildMode then
+		workshopCamera:Activate(mechId)
+		cameraBar:SetCameraMode(workshopCamera.FreeFly and "Fly" or "Orbit")
 		nodes:SetMech(mechId)
 		selectPart(selectedPart)
 		task.spawn(function() refreshInventory(true) end)
 	else
+		workshopCamera:Deactivate(cameraReason or "Close")
 		statusLockUntil = 0
 	end
 end
@@ -194,11 +210,19 @@ local function testMachine()
 	end
 	if not mechId then status("BUILD A MACHINE FIRST", "bad", 1.0); return end
 	if machineMode == "Test" then enterEditMode(); return end
+
+	-- Release Scriptable camera before pilot/test authority changes.
+	workshopCamera:Deactivate("Test")
 	local success, result = machineInvoke({ Action="SetMode", MechId=mechId, Mode="Test" }, 8)
-	if not success then status(result or "TEST MODE UNAVAILABLE", "bad", 1.5); return end
+	if not success then
+		workshopCamera:Activate(mechId)
+		cameraBar:SetCameraMode(workshopCamera.FreeFly and "Fly" or "Orbit")
+		status(result or "TEST MODE UNAVAILABLE", "bad", 1.5)
+		return
+	end
 	machineMode = "Test"
 	ui:SetMode("Test")
-	setBuildVisible(false)
+	setBuildVisible(false, "Test")
 	local remote = type(result)=="table" and result.RemoteControl == true
 	status(if remote then "TEST MODE — REMOTE CONTROL ACTIVE" else "TEST MODE — SIT IN A PILOT SEAT", "blue", 1.2)
 end
@@ -342,6 +366,36 @@ local function selectSlot(slot)
 	if partId then selectPart(partId) end
 end
 
+local function frameCamera()
+	if not buildMode then return end
+	workshopCamera:FrameMachine()
+	status("CAMERA FRAMED TO MACHINE", nil, .3)
+end
+
+local function setOrbitCamera()
+	if not buildMode then return end
+	workshopCamera:SetFreeFly(false)
+	cameraBar:SetCameraMode("Orbit")
+	status("CAMERA ORBIT MODE", nil, .25)
+end
+
+local function toggleFreeFly()
+	if not buildMode then return false end
+	local enabled = workshopCamera:SetFreeFly(not workshopCamera.FreeFly)
+	cameraBar:SetCameraMode(if enabled then "Fly" else "Orbit")
+	status(if enabled then "CAMERA FREE-FLY" else "CAMERA ORBIT MODE", nil, .3)
+	return enabled
+end
+
+local function cameraView(viewName)
+	if not buildMode then return end
+	local ok = workshopCamera:SetView(viewName)
+	if ok then
+		cameraBar:SetCameraMode("Orbit")
+		status("CAMERA " .. string.upper(tostring(viewName)), nil, .25)
+	end
+end
+
 local function refreshBlueprints(silent)
 	if not profileReady() then
 		if not silent then status("PROFILE LOADING — BLUEPRINTS WILL APPEAR AUTOMATICALLY", "blue", 1.2) end
@@ -477,10 +531,16 @@ ui:SetMachineReady(false)
 ui:SetMirrorState(false)
 ui:SetBlueprints({})
 
+cameraCallbacks.FrameCamera = frameCamera
+cameraCallbacks.ToggleFreeFly = toggleFreeFly
+cameraCallbacks.CameraView = cameraView
+cameraCallbacks.SetOrbit = setOrbitCamera
+
 input = BuildInput.new(UserInputService, {
 	Toggle=toggleBuildMode, Rotate=rotate, Mirror=mirror, Place=placePart, Remove=removePart,
 	Duplicate=duplicateTarget, Undo=function() applyHistory("Undo") end, Redo=function() applyHistory("Redo") end,
 	SelectSlot=selectSlot, TestMachine=testMachine,
+	FrameCamera=frameCamera, ToggleFreeFly=toggleFreeFly, CameraView=cameraView,
 })
 
 player:SetAttribute("BuildMode", false)
@@ -488,6 +548,8 @@ ui:SetBuildMode(false)
 preview:SetEnabled(false)
 nodes:SetEnabled(false)
 nodes:SetMech(mechId)
+workshopCamera:SetMech(mechId)
+cameraBar:SetVisible(false)
 
 player:GetAttributeChangedSignal("ActiveMechId"):Connect(function()
 	local value = normalizeMechId(player:GetAttribute("ActiveMechId"))
@@ -523,8 +585,9 @@ task.spawn(function()
 	if ready and profileReady() then refreshBlueprints(true) end
 end)
 
-local renderConnection = RunService.RenderStepped:Connect(function()
+local renderConnection = RunService.RenderStepped:Connect(function(dt)
 	if buildMode then
+		workshopCamera:Update(dt)
 		local state = preview:Update(mechId)
 		nodes:Update()
 		refreshSummary()
@@ -543,10 +606,12 @@ end)
 script.Destroying:Connect(function()
 	player:SetAttribute("BuildMode", false)
 	if input then input:Destroy() end
+	workshopCamera:Destroy()
+	cameraBar:Destroy()
 	preview:Destroy()
 	nodes:Destroy()
 	ui:Destroy()
 	if renderConnection then renderConnection:Disconnect() end
 end)
 
-print("[GOD MACHINES] Workshop V2 initialized with", #catalog, "parts")
+print("[GOD MACHINES] Workshop V3 initialized with", #catalog, "parts")
