@@ -8,6 +8,8 @@ local Definitions = require(game.ReplicatedStorage.MechFramework.Shared.BattleDe
 
 local Match: any = { _matches = {}, _mechToMatch = {}, _events = {} }
 local ORDER = { Preparing=1, Spawning=2, Active=3, Ending=4, Results=5 }
+local RESULTS_CLEANUP_DELAY = 12
+local MATCH_RECORD_TTL = 90
 
 local function copy(value: any): any
 	if type(value) ~= "table" then return value end
@@ -172,7 +174,6 @@ function Match:_bindParticipantControls(participant: any, mechId: string, bluepr
 	if not mech then return end
 
 	if participant.IsAI then
-		-- AI receives the same component groups as players and submits server intent through ControlService.
 		self._control:GenerateDefaultBindings(mech.Owner, mechId, true)
 		local model = modelFor(mechId)
 		if model then model:SetAttribute("AIControlled", true) end
@@ -217,8 +218,43 @@ function Match:_cleanupSpawned(match: any)
 		if model then model:Destroy() end
 		self._mechs:Destroy(mechId)
 	end
+	for _, participant in pairs(match.Participants) do
+		if not participant.IsAI and participant.MechId then
+			local userId = tonumber(participant.UserId)
+			local player = userId and Players:GetPlayerByUserId(userId) or nil
+			if player and player:GetAttribute("ActiveMechId") == participant.MechId then
+				player:SetAttribute("ActiveMechId", nil)
+				player:SetAttribute("BuildMode", false)
+			end
+		end
+		participant.MechId = nil
+	end
 	table.clear(match.Mechs)
 	table.clear(match.Alive)
+	match.CleanedAt = os.clock()
+end
+
+function Match:_scheduleCleanup(match: any)
+	if match.CleanupScheduled then return end
+	match.CleanupScheduled = true
+	task.delay(RESULTS_CLEANUP_DELAY, function()
+		if self._matches[match.Id] ~= match or match.State ~= "Results" then return end
+		self:_cleanupSpawned(match)
+		task.delay(MATCH_RECORD_TTL, function()
+			if self._matches[match.Id] == match and match.State == "Results" then self._matches[match.Id] = nil end
+		end)
+	end)
+end
+
+function Match:_abortSpawn(match: any, reason: string): (boolean, string)
+	self:_cleanupSpawned(match)
+	match.EndReason = reason
+	match.EndedAt = os.clock()
+	self:_setState(match, "Ending")
+	self:_setState(match, "Results")
+	self:_emit("BattleEnded", {MatchId=match.Id, Reason=reason, Objectives=copy(match.Objectives), Aborted=true})
+	self:_scheduleCleanup(match)
+	return false, reason
 end
 
 function Match:Spawn(matchId: string): (boolean, string?)
@@ -229,21 +265,17 @@ function Match:Spawn(matchId: string): (boolean, string?)
 	local list = {}
 	for _, participant in pairs(match.Participants) do table.insert(list, participant) end
 	table.sort(list, function(a, b) return tostring(a.Id) < tostring(b.Id) end)
-	if #list == 0 then self:_setState(match, "Ending"); return false, "NoParticipants" end
+	if #list == 0 then return self:_abortSpawn(match, "NoParticipants") end
 
 	for index, participant in ipairs(list) do
 		local blueprint = self:_blueprint(participant)
-		if not blueprint then
-			self:_cleanupSpawned(match); self:_setState(match, "Ending"); return false, "MissingBlueprint"
-		end
+		if not blueprint then return self:_abortSpawn(match, "MissingBlueprint") end
 		local ownerId = tonumber(participant.UserId) or -(index + 100000)
 		if participant.IsAI then ownerId = -(math.abs(ownerId) + 100000) end
 		local ok, mechId = self._build:SpawnBlueprint(ownerId, blueprint, self:_spawnCFrame(match,index,#list,blueprint), {
 			MatchId=matchId, Team=participant.Team, IsAI=participant.IsAI, BattleSpawn=true,
 		})
-		if not ok then
-			self:_cleanupSpawned(match); self:_setState(match, "Ending"); return false, tostring(mechId)
-		end
+		if not ok then return self:_abortSpawn(match, tostring(mechId)) end
 		participant.MechId = mechId
 		match.Mechs[mechId] = participant.Id
 		match.Alive[participant.Id] = true
@@ -338,6 +370,7 @@ function Match:End(matchId: string, reason: string): boolean
 	for _, participant in pairs(match.Participants) do self:_reward(match, participant); self:_clearParticipantControl(participant) end
 	self:_setState(match, "Results")
 	self:_emit("BattleEnded", { MatchId=matchId, Reason=reason, Objectives=copy(match.Objectives) })
+	self:_scheduleCleanup(match)
 	return true
 end
 
