@@ -22,6 +22,7 @@ local Shared = framework:WaitForChild("Shared")
 local Remotes = framework:WaitForChild("Remotes")
 local Functions = Remotes:WaitForChild("Functions")
 local BuildMath = require(Shared:WaitForChild("BuildMath"))
+local WeaponCatalog = require(Shared:WaitForChild("WeaponCatalog"))
 local remote = Functions:WaitForChild("RequestBuildAction")
 
 if not remote:IsA("RemoteFunction") then
@@ -31,8 +32,16 @@ end
 local PARTS = {
 	{ Id = "StructuralFrame", DisplayName = "STRUCTURAL FRAME", ShortName = "FRAME", Slot = 1 },
 	{ Id = "SmallReactor", DisplayName = "SMALL REACTOR", ShortName = "REACTOR", Slot = 2 },
-	{ Id = "Autocannon", DisplayName = "AUTOCANNON", ShortName = "CANNON", Slot = 3 },
 }
+
+for index, weapon in ipairs(WeaponCatalog.Ordered) do
+	table.insert(PARTS, {
+		Id = weapon.Id,
+		DisplayName = weapon.DisplayName,
+		ShortName = weapon.ShortName,
+		Slot = if index <= 7 then index + 2 else nil,
+	})
+end
 
 local buildMode = false
 local selectedPart = PARTS[1].Id
