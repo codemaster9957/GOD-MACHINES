@@ -20,7 +20,12 @@ end
 local function componentCount(components:any):number local count=0; for _ in pairs(components or {}) do count+=1 end; return count end
 
 function Pilot:Init(container:any)
-	self._mechs=container:Get("MechService"); self._build=container:Get("BuildService"); self._control=container:Get("ControlService"); self._save=container:Get("SaveService")
+	self._mechs=container:Get("MechService")
+	self._build=container:Get("BuildService")
+	self._control=container:Get("ControlService")
+	self._save=container:Get("SaveService")
+	self._power=container:Get("PowerService")
+	self._heat=container:Get("HeatService")
 	self._remote=game.ReplicatedStorage.MechFramework.Remotes.Functions.RequestMachineAction
 end
 function Pilot:_hasRemoteCore(mechId:string):boolean
@@ -35,12 +40,24 @@ end
 function Pilot:_setEditMode(player:Player,mechId:string,editMode:boolean):(boolean,any)
 	if not self._mechs:IsOwner(player.UserId,mechId) then return false,"NotAuthorized" end
 	local model=assemblyModel(mechId); if not model then return false,"MachineNotRealized" end
-	self._control:ClearMech(mechId); model:SetAttribute("EditMode",editMode)
-	for _,root in ipairs(rootParts(model)) do root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero; root.Anchored=editMode end
+	self._control:ClearMech(mechId)
+	model:SetAttribute("EditMode",editMode)
+	for _,root in ipairs(rootParts(model)) do
+		root.AssemblyLinearVelocity=Vector3.zero
+		root.AssemblyAngularVelocity=Vector3.zero
+		root.Anchored=editMode
+	end
 	if editMode then
-		player:SetAttribute("BuildMode",true); model:SetAttribute("PilotUserId",nil)
+		player:SetAttribute("BuildMode",true)
+		model:SetAttribute("PilotUserId",nil)
 	else
-		player:SetAttribute("ActiveMechId",mechId); player:SetAttribute("BuildMode",false); self._control:GenerateDefaultBindings(player.UserId,mechId,false)
+		-- Prime topology/state without consuming time-based resources so electric machines respond immediately.
+		self._power:Invalidate(mechId)
+		self._power:Evaluate(mechId,0)
+		self._heat:Invalidate(mechId)
+		player:SetAttribute("ActiveMechId",mechId)
+		player:SetAttribute("BuildMode",false)
+		self._control:GenerateDefaultBindings(player.UserId,mechId,false)
 		if self:_hasRemoteCore(mechId) then model:SetAttribute("PilotUserId",player.UserId) else model:SetAttribute("PilotUserId",nil) end
 	end
 	return true,{Mode=if editMode then "Edit" else "Test",MechId=mechId,RemoteControl=(not editMode) and self:_hasRemoteCore(mechId),SeatRequired=(not editMode) and not self:_hasRemoteCore(mechId)}
