@@ -9,7 +9,7 @@ type NumberMap = {[string]: number}
 
 local Combat: any = {
 	_lastFire = {} :: NumberMap,
-	_ammo = {} :: NumberMap, -- keyed by mech id; generic ammunition capacity is shared by ballistic weapons
+	_ammo = {} :: NumberMap,
 	_mechs = nil,
 	_heat = nil,
 	_power = nil,
@@ -53,11 +53,7 @@ end
 function Combat:_ammoState(mechId: string): number
 	local current = self._ammo[mechId]
 	local capacity = self:_ammoCapacity(mechId)
-	if current == nil then
-		current = capacity
-	elseif current > capacity then
-		current = capacity
-	end
+	if current == nil then current = capacity elseif current > capacity then current = capacity end
 	self._ammo[mechId] = math.max(0, current)
 	return self._ammo[mechId]
 end
@@ -72,13 +68,10 @@ function Combat:CanFire(userId: number, mechId: string, weaponId: string): (bool
 	local state = metadata.WeaponState or "Ready"
 	if state ~= "Ready" then return false, tostring(state) end
 	if metadata.Overheated == true or metadata.Jammed == true then return false, "WeaponDisabled" end
-
 	local fireRate = math.max(tonumber(config.FireRate) or 1, .01)
 	if os.clock() - (self._lastFire[weaponId] or -math.huge) < 1 / fireRate then return false, "Cooldown" end
-
 	local requiredPower = math.max(0, tonumber(config.RequiredPower) or 0)
 	if requiredPower > 0 and not self._power:CanConsumePower(mechId, weaponId, requiredPower) then return false, "NoPower" end
-
 	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
 	if ammoUsage > 0 and self:_ammoState(mechId) < ammoUsage then return false, "NoAmmoStorage" end
 	return true, nil
@@ -94,7 +87,6 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 	if not part then return false, "NoPhysicalWeapon" end
 	local model = assemblyModel(mechId)
 	if not model then return false, "NoPhysicalWeapon" end
-
 	local forward = part.CFrame.LookVector
 	local direction = forward
 	if type(aim) == "table" and typeof(aim.Direction) == "Vector3" and aim.Direction.Magnitude > .9 then
@@ -103,25 +95,19 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 		if maxArc > 0 and math.acos(math.clamp(forward:Dot(requested), -1, 1)) <= maxArc then direction = requested end
 	end
 	local origin = part.Position + forward * (math.max(part.Size.Z, part.Size.X, part.Size.Y) * .5 + .2)
-
 	local energyUsage = math.max(0, tonumber(config.EnergyUsage) or 0)
 	if energyUsage > 0 then
-		local supplied = tonumber(self._power:RequestPower(mechId, weaponId, energyUsage)) or 0
+		local suppliedResult = self._power:RequestPower(mechId, weaponId, energyUsage)
+		local supplied = tonumber(suppliedResult) or 0
 		if supplied < energyUsage then return false, "PowerRejected" end
 	end
-
 	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
 	if ammoUsage > 0 then self._ammo[mechId] = math.max(0, self:_ammoState(mechId) - ammoUsage) end
 	self._lastFire[weaponId] = os.clock()
-
 	local heatGenerated = math.max(0, tonumber(config.HeatGenerated) or 0)
 	if heatGenerated > 0 then self._heat:AddHeat(mechId, weaponId, heatGenerated) end
-
-	local projectileSuccess = self._projectiles:Fire(origin, direction, config, {
-		MechId=mechId, WeaponId=weaponId, UserId=userId, Ignore=model,
-	})
+	local projectileSuccess = self._projectiles:Fire(origin, direction, config, {MechId=mechId, WeaponId=weaponId, UserId=userId, Ignore=model})
 	if projectileSuccess == false then return false, "ProjectileRejected" end
-
 	local recoil = math.max(0, tonumber(config.Recoil) or 0)
 	if recoil > 0 then
 		local assembly = part.AssemblyRootPart or part
@@ -130,10 +116,7 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 	return true, nil
 end
 
-function Combat:RecordFire(userId: number, mechId: string, weaponId: string): (boolean, string?)
-	return self:Fire(userId, mechId, weaponId, nil)
-end
-
+function Combat:RecordFire(userId: number, mechId: string, weaponId: string): (boolean, string?) return self:Fire(userId, mechId, weaponId, nil) end
 function Combat:Reload(mechId: string, _weaponId: string, amount: number): boolean
 	if amount <= 0 then return false end
 	local capacity = self:_ammoCapacity(mechId)
@@ -141,23 +124,11 @@ function Combat:Reload(mechId: string, _weaponId: string, amount: number): boole
 	self._ammo[mechId] = math.min(capacity, self:_ammoState(mechId) + amount)
 	return true
 end
-
-function Combat:GetAmmo(mechId: string): (number, number)
-	return self:_ammoState(mechId), self:_ammoCapacity(mechId)
-end
-
+function Combat:GetAmmo(mechId: string): (number, number) return self:_ammoState(mechId), self:_ammoCapacity(mechId) end
 function Combat:DebugWeapon(mechId: string, weaponId: string): any
 	local weapon = self._mechs:GetComponent(mechId, weaponId)
 	if not weapon or weapon.Combat == nil then return nil end
 	local ammo, capacity = self:GetAmmo(mechId)
-	return {
-		Config=Definitions.Resolve(weapon.Combat),
-		Ammo=ammo,
-		AmmoCapacity=capacity,
-		LastFire=self._lastFire[weaponId],
-		Power=self._power:GetPowerState(mechId, weaponId),
-		Temperature=self._heat:GetTemperature(mechId, weaponId),
-	}
+	return {Config=Definitions.Resolve(weapon.Combat), Ammo=ammo, AmmoCapacity=capacity, LastFire=self._lastFire[weaponId], Power=self._power:GetPowerState(mechId, weaponId), Temperature=self._heat:GetTemperature(mechId, weaponId)}
 end
-
 return Combat
