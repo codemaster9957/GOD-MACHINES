@@ -56,6 +56,14 @@ local OPTIONAL_ORDER = {
 	"NetworkService",
 }
 
+local MACHINE_REQUIRED = {
+	"ControlService",
+	"PilotService",
+	"VehicleService",
+	"PropulsionService",
+	"AerodynamicsService",
+}
+
 local function recordFailure(stage: string, name: string, reason: any)
 	local message = string.format("%s %s: %s", stage, name, tostring(reason))
 	warn("[MechFramework] " .. message)
@@ -122,6 +130,20 @@ print("[MechFramework] Core builder stack ready")
 for _, name in OPTIONAL_ORDER do initService(name, false) end
 for _, name in OPTIONAL_ORDER do startService(name, false) end
 
-if started.PilotService then framework:SetAttribute("MachineServerReady", true) end
+local machineHealthy = true
+local missing = {}
+for _, name in ipairs(MACHINE_REQUIRED) do
+	if not started[name] then machineHealthy = false; table.insert(missing, name) end
+end
+framework:SetAttribute("MachineServerReady", machineHealthy)
+if machineHealthy then
+	print("[MechFramework] Machine simulation stack ready")
+else
+	local message = "Required machine services unavailable: " .. table.concat(missing, ", ")
+	warn("[MechFramework] " .. message)
+	framework:SetAttribute("ServerBootstrapState", "Degraded")
+	if framework:GetAttribute("ServerBootstrapError") == "" then framework:SetAttribute("ServerBootstrapError", message) end
+end
+
 if framework:GetAttribute("ServerBootstrapState") ~= "Degraded" then framework:SetAttribute("ServerBootstrapState", "Ready") end
 print("[MechFramework] Startup complete", framework:GetAttribute("ServerBootstrapState"))
