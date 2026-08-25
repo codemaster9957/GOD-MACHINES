@@ -178,10 +178,16 @@ function BuildUI.new(playerGui)
 	subtitle.Size = UDim2.new(1, -28, 0, 18)
 	subtitle.TextColor3 = COLORS.Muted
 
-	local list = Instance.new("Frame")
+	local list = Instance.new("ScrollingFrame")
 	list.Position = UDim2.fromOffset(10, 64)
 	list.Size = UDim2.new(1, -20, 1, -74)
 	list.BackgroundTransparency = 1
+	list.BorderSizePixel = 0
+	list.ScrollBarThickness = 4
+	list.ScrollBarImageColor3 = COLORS.Accent
+	list.CanvasSize = UDim2.fromOffset(0, 0)
+	list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	list.ScrollingDirection = Enum.ScrollingDirection.Y
 	list.Parent = inventory
 
 	local layout = Instance.new("UIListLayout")
@@ -425,44 +431,46 @@ function BuildUI:SetParts(parts, callback)
 			button
 
 		--------------------------------------------------
-		-- HOTBAR BUTTON
+		-- HOTBAR BUTTON (NUMBER-KEY PARTS ONLY)
 		--------------------------------------------------
 
-		local hot =
-			Instance.new("TextButton")
+		if type(part.Slot) == "number" then
+			local hot =
+				Instance.new("TextButton")
 
-		hot.Size =
-			UDim2.fromOffset(138, 52)
+			hot.Size =
+				UDim2.fromOffset(138, 52)
 
-		hot.BackgroundColor3 =
-			COLORS.Panel2
+			hot.BackgroundColor3 =
+				COLORS.Panel2
 
-		hot.Text =
-			"[" ..
-			tostring(part.Slot) ..
-			"]  " ..
-			part.ShortName
+			hot.Text =
+				"[" ..
+				tostring(part.Slot) ..
+				"]  " ..
+				part.ShortName
 
-		hot.TextColor3 =
-			COLORS.Text
+			hot.TextColor3 =
+				COLORS.Text
 
-		hot.TextSize = 12
+			hot.TextSize = 12
 
-		hot.Font =
-			Enum.Font.GothamBold
+			hot.Font =
+				Enum.Font.GothamBold
 
-		hot.Parent =
-			self.Hotbar
+			hot.Parent =
+				self.Hotbar
 
-		corner(hot, 5)
-		stroke(hot)
+			corner(hot, 5)
+			stroke(hot)
 
-		hot.MouseButton1Click:Connect(function()
-			callback(part.Id)
-		end)
+			hot.MouseButton1Click:Connect(function()
+				callback(part.Id)
+			end)
 
-		self.HotbarButtons[part.Id] =
-			hot
+			self.HotbarButtons[part.Id] =
+				hot
+		end
 	end
 end
 
