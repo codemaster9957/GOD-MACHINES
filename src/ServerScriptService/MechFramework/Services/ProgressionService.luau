@@ -2,7 +2,7 @@
 -- Server-authoritative crafting, salvage, loot, and repair transactions.
 local HttpService = game:GetService("HttpService")
 local Definitions = require(game.ReplicatedStorage.MechFramework.Shared.CollectionDefinitions)
-local Progression: any = { _inventory = nil, _claimedRewards = {} }
+local Progression: any = { _inventory = nil }
 
 local function weightedEntry(entries: {any}, rng: Random): any?
 	local total = 0
@@ -60,28 +60,29 @@ function Progression:SalvagePart(userId: number, uniqueId: string): (boolean, an
 end
 
 function Progression:AwardLoot(userId: number, tableId: string, rewardId: string, seed: number?): (boolean, any)
-	-- rewardId must originate from a trusted server encounter/mission and is single-use.
-	if type(rewardId) ~= "string" or #rewardId < 8 then return false, "InvalidReward" end
-	local claimKey = tostring(userId) .. ":" .. rewardId
-	if self._claimedRewards[claimKey] then return false, "AlreadyClaimed" end
+	-- Persist idempotency in the same inventory record that is saved, not in a process-local cache.
+	if type(rewardId) ~= "string" or #rewardId < 8 or #rewardId > 180 then return false, "InvalidReward" end
 	local loot = Definitions.LootTables[tableId]
 	if not loot then return false, "UnknownLootTable" end
-	self._claimedRewards[claimKey] = true
-	local rng = Random.new(seed or math.floor(os.clock() * 100000) % 2147483647)
 	local awarded = {}
-	for _ = 1, loot.Rolls do
-		local entry = weightedEntry(loot.Entries, rng)
-		if entry then
-			local amount = rng:NextInteger(entry.Min or 1, entry.Max or 1)
-			if entry.Kind == "Material" then
-				self._inventory:GrantMaterial(userId, entry.Id, amount, "Loot:" .. tableId)
-			else
-				local condition = entry.Condition and rng:NextNumber(entry.Condition[1], entry.Condition[2]) or 1
-				self._inventory:GrantPart(userId, entry.Id, amount, { Source = "Loot:" .. tableId, Condition = condition })
+	local transactionId = "Loot:" .. tableId .. ":" .. rewardId
+	local applied = self._inventory:ApplyTransactionOnce(userId, transactionId, function()
+		local rng = Random.new(seed or math.floor(os.clock() * 100000) % 2147483647)
+		for _ = 1, loot.Rolls do
+			local entry = weightedEntry(loot.Entries, rng)
+			if entry then
+				local amount = rng:NextInteger(entry.Min or 1, entry.Max or 1)
+				if entry.Kind == "Material" then
+					self._inventory:GrantMaterial(userId, entry.Id, amount, "Loot:" .. tableId)
+				else
+					local condition = entry.Condition and rng:NextNumber(entry.Condition[1], entry.Condition[2]) or 1
+					self._inventory:GrantPart(userId, entry.Id, amount, { Source = "Loot:" .. tableId, Condition = condition })
+				end
+				table.insert(awarded, { Kind = entry.Kind, Id = entry.Id, Amount = amount })
 			end
-			table.insert(awarded, { Kind = entry.Kind, Id = entry.Id, Amount = amount })
 		end
-	end
+	end)
+	if not applied then return false, "AlreadyClaimed" end
 	return true, awarded
 end
 
