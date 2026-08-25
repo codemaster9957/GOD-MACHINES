@@ -18,6 +18,7 @@ local VALID_CATEGORIES = table.freeze({
 	Structural=true, Armour=true, Mobility=true, Propulsion=true, Aerodynamics=true,
 	PowerCooling=true, Control=true, Weapons=true, Utility=true,
 })
+local VALID_FACES = table.freeze({ Top=true, Bottom=true, Left=true, Right=true, Front=true, Back=true })
 
 local function copyArray(values: {string}?): {string}
 	local out = {}
@@ -32,22 +33,96 @@ local function clone(value: any): any
 	return out
 end
 
-function H.node(name: string, nodeType: string, transform: CFrame, accepts: {string}?): any
+function H.node(name: string, nodeType: string, transform: CFrame, accepts: {string}?, metadata: any?): any
 	local compatible = copyArray(accepts)
-	return { Name=name, Type=nodeType, Transform=transform, Accepts=compatible, CompatibleWith=copyArray(compatible) }
+	local out: any = { Name=name, Type=nodeType, Transform=transform, Accepts=compatible, CompatibleWith=copyArray(compatible) }
+	if type(metadata)=="table" then
+		for key,value in pairs(metadata) do out[key]=clone(value) end
+	end
+	return out
+end
+
+local function faceTransform(size: Vector3, face: string, horizontal: number, vertical: number): CFrame
+	if face=="Top" then
+		return CFrame.new(horizontal,size.Y/2,vertical)*CFrame.Angles(math.pi/2,0,0)
+	elseif face=="Bottom" then
+		return CFrame.new(horizontal,-size.Y/2,vertical)*CFrame.Angles(-math.pi/2,0,0)
+	elseif face=="Left" then
+		return CFrame.new(-size.X/2,vertical,horizontal)*CFrame.Angles(0,math.pi/2,0)
+	elseif face=="Right" then
+		return CFrame.new(size.X/2,vertical,horizontal)*CFrame.Angles(0,-math.pi/2,0)
+	elseif face=="Front" then
+		return CFrame.new(horizontal,vertical,-size.Z/2)
+	elseif face=="Back" then
+		return CFrame.new(horizontal,vertical,size.Z/2)*CFrame.Angles(0,math.pi,0)
+	end
+	error("Unknown attachment face: "..tostring(face))
 end
 
 function H.boxNodes(size: Vector3, nodeType: string?, accepts: {string}?): {any}
 	local kind = nodeType or "Structural"
 	return {
-		H.node("Top",kind,CFrame.new(0,size.Y/2,0)*CFrame.Angles(math.pi/2,0,0),accepts),
-		H.node("Bottom",kind,CFrame.new(0,-size.Y/2,0)*CFrame.Angles(-math.pi/2,0,0),accepts),
+		H.node("Top",kind,faceTransform(size,"Top",0,0),accepts,{Surface="Top",Priority=10}),
+		H.node("Bottom",kind,faceTransform(size,"Bottom",0,0),accepts,{Surface="Bottom",Priority=10}),
 		-- Side nodes face OUTWARD so wheel/armour/mobility parts mount outside the chassis.
-		H.node("Left",kind,CFrame.new(-size.X/2,0,0)*CFrame.Angles(0,math.pi/2,0),accepts),
-		H.node("Right",kind,CFrame.new(size.X/2,0,0)*CFrame.Angles(0,-math.pi/2,0),accepts),
-		H.node("Front",kind,CFrame.new(0,0,-size.Z/2),accepts),
-		H.node("Back",kind,CFrame.new(0,0,size.Z/2)*CFrame.Angles(0,math.pi,0),accepts),
+		H.node("Left",kind,faceTransform(size,"Left",0,0),accepts,{Surface="Left",Priority=10}),
+		H.node("Right",kind,faceTransform(size,"Right",0,0),accepts,{Surface="Right",Priority=10}),
+		H.node("Front",kind,faceTransform(size,"Front",0,0),accepts,{Surface="Front",Priority=10}),
+		H.node("Back",kind,faceTransform(size,"Back",0,0),accepts,{Surface="Back",Priority=10}),
 	}
+end
+
+local function gridCoordinate(index: number, count: number, span: number): number
+	if count<=1 then return 0 end
+	local alpha=(index-1)/(count-1)
+	return (alpha-.5)*span*.72
+end
+
+function H.faceGridNodes(size: Vector3, face: string, rows: number, columns: number, nodeType: string?, accepts: {string}?, prefix: string?): {any}
+	assert(VALID_FACES[face]==true,"faceGridNodes requires valid face")
+	rows=math.max(1,math.floor(rows))
+	columns=math.max(1,math.floor(columns))
+	local kind=nodeType or "Structural"
+	local horizontalSpan: number
+	local verticalSpan: number
+	if face=="Top" or face=="Bottom" then
+		horizontalSpan=size.X; verticalSpan=size.Z
+	elseif face=="Left" or face=="Right" then
+		horizontalSpan=size.Z; verticalSpan=size.Y
+	else
+		horizontalSpan=size.X; verticalSpan=size.Y
+	end
+	local nodes={}
+	local stem=prefix or (face.."Grid")
+	for row=1,rows do
+		for column=1,columns do
+			local horizontal=gridCoordinate(column,columns,horizontalSpan)
+			local vertical=gridCoordinate(row,rows,verticalSpan)
+			local name=string.format("%s_%02d_%02d",stem,row,column)
+			table.insert(nodes,H.node(name,kind,faceTransform(size,face,horizontal,vertical),accepts,{
+				Surface=face,
+				Role="SurfaceGrid",
+				Priority=20,
+			}))
+		end
+	end
+	return nodes
+end
+
+function H.mergeNodes(...: {any}): {any}
+	local out={}
+	for _,list in ipairs({...}) do
+		for _,node in ipairs(list or {}) do table.insert(out,node) end
+	end
+	return out
+end
+
+function H.offsetNode(node: any, name: string, offset: CFrame): any
+	assert(type(node)=="table" and typeof(node.Transform)=="CFrame","offsetNode requires valid source node")
+	local out=clone(node)
+	out.Name=name
+	out.Transform=node.Transform*offset
+	return out
 end
 
 local function primitive(kind: string, name: string, size: Vector3, transform: CFrame?, region: string?, material: Enum.Material?, role: string?): any
@@ -113,8 +188,6 @@ function H.part(id: string, displayName: string, shortName: string, a4: any, a5:
 		category=a4; description=a5; size=a6; mass=a7; health=a8; geometry=a9; extra=a10 or {}
 	else
 		description=a4; size=a5; mass=a6; health=a7; geometry=a8; extra=a9 or {}
-		-- Structural definitions are the legacy compact form that omitted Category.
-		-- Other category modules still override this explicitly through extra.Category.
 		category=if type(extra)=="table" then (extra.Category or "Structural") else "Structural"
 	end
 
