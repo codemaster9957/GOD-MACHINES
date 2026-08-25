@@ -2,6 +2,8 @@
 -- Connected, scheduled power simulation. Power is a rate; battery Charge is stored energy.
 -- Read-only evaluations never mutate stored energy or fuel. Instant burst consumers drain real network storage.
 
+local Workspace = game:GetService("Workspace")
+
 local PowerService: any = {
 	_cache = {},
 	_topology = {},
@@ -21,6 +23,12 @@ local function metadata(component: any): any
 	return component.Metadata
 end
 
+local function isSimulating(mechId: string): boolean
+	local assemblies = Workspace:FindFirstChild("MechAssemblies")
+	local model = assemblies and assemblies:FindFirstChild(mechId)
+	return model ~= nil and model:IsA("Model") and model:GetAttribute("EditMode") == false
+end
+
 function PowerService:Init(container: any)
 	self._mechs = container:Get("MechService")
 	self._fuel = container:Get("FuelService")
@@ -30,7 +38,15 @@ function PowerService:Start()
 	task.spawn(function()
 		while true do
 			task.wait(self._tickRate)
-			for mechId in pairs(self._active) do self:Evaluate(mechId, self._tickRate) end
+			for mechId in pairs(self._active) do
+				if not self._mechs:Get(mechId) then
+					self._active[mechId] = nil
+					self._cache[mechId] = nil
+					self._topology[mechId] = nil
+				elseif isSimulating(mechId) then
+					self:Evaluate(mechId, self._tickRate)
+				end
+			end
 		end
 	end)
 end
