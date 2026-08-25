@@ -39,6 +39,7 @@ local selectedPart = PARTS[1].Id
 local activeAttribute = player:GetAttribute("ActiveMechId")
 local mechId = if type(activeAttribute) == "string" then activeAttribute else nil
 local definitions = {}
+local loadingDefinitions = {}
 local statusLockUntil = 0
 local input = nil
 
@@ -50,7 +51,50 @@ local function status(text, tone, duration)
 	statusLockUntil = os.clock() + (duration or 0)
 end
 
+local function startupReason(fallback)
+	local state = framework:GetAttribute("ServerBootstrapState")
+	local reason = framework:GetAttribute("ServerBootstrapError")
+	if type(reason) == "string" and reason ~= "" then
+		return "SERVER " .. tostring(state or "ERROR") .. ": " .. reason
+	end
+	if type(state) == "string" and state ~= "" and state ~= "Ready" then
+		return "SERVER " .. state
+	end
+	return fallback
+end
+
+local function waitForBuilderReady(timeoutSeconds)
+	if framework:GetAttribute("BuilderServerReady") == true then
+		return true, nil
+	end
+
+	local deadline = os.clock() + (timeoutSeconds or 8)
+	while os.clock() < deadline do
+		if framework:GetAttribute("BuilderServerReady") == true then
+			return true, nil
+		end
+
+		local state = framework:GetAttribute("ServerBootstrapState")
+		if state == "Degraded" then
+			local reason = framework:GetAttribute("ServerBootstrapError")
+			if type(reason) == "string" and reason ~= "" then
+				-- A degraded optional system does not necessarily mean the builder failed.
+				-- Keep waiting for the explicit builder-ready flag until the deadline.
+			end
+		end
+
+		task.wait(0.05)
+	end
+
+	return false, startupReason("SERVER NOT READY")
+end
+
 local function invoke(request, timeoutSeconds)
+	local ready, readyReason = waitForBuilderReady(timeoutSeconds or 8)
+	if not ready then
+		return false, readyReason
+	end
+
 	local finished = false
 	local callOk = false
 	local success = false
@@ -72,11 +116,11 @@ local function invoke(request, timeoutSeconds)
 	end
 
 	if not finished then
-		return false, "RequestTimeout"
+		return false, startupReason("REQUEST TIMEOUT")
 	end
 
 	if not callOk then
-		return false, "ServerError: " .. tostring(success)
+		return false, "SERVER ERROR: " .. tostring(success)
 	end
 
 	return success == true, result
@@ -88,10 +132,20 @@ local function loadDefinition(partType)
 		return cached
 	end
 
+	if loadingDefinitions[partType] then
+		local deadline = os.clock() + 6
+		while loadingDefinitions[partType] and os.clock() < deadline do
+			task.wait()
+		end
+		return definitions[partType], definitions[partType] and nil or "DEFINITION UNAVAILABLE"
+	end
+
+	loadingDefinitions[partType] = true
 	local success, result = invoke({
 		Action = "Definition",
 		PartType = partType,
-	}, 5)
+	}, 8)
+	loadingDefinitions[partType] = nil
 
 	if not success then
 		warn("[GOD MACHINES] Definition request failed:", partType, result)
@@ -100,7 +154,7 @@ local function loadDefinition(partType)
 
 	if type(result) ~= "table" or typeof(result.Size) ~= "Vector3" then
 		warn("[GOD MACHINES] Invalid definition returned for", partType)
-		return nil, "InvalidDefinition"
+		return nil, "INVALID DEFINITION"
 	end
 
 	definitions[partType] = result
@@ -110,7 +164,7 @@ end
 local function selectPart(partType)
 	local definition, reason = loadDefinition(partType)
 	if not definition then
-		status(reason or "PART UNAVAILABLE", "bad", 1.2)
+		status(reason or "PART UNAVAILABLE", "bad", 1.5)
 		return false
 	end
 
@@ -182,7 +236,7 @@ local function placePart()
 		TargetNode = data.TargetNode,
 		SourceNode = data.SourceNode,
 		Rotation = data.Rotation,
-	}, 5)
+	}, 8)
 
 	if success then
 		if type(result) == "table" and type(result.MechId) == "string" then
@@ -193,7 +247,7 @@ local function placePart()
 	end
 
 	preview:Reject()
-	status(tostring(result or "PLACEMENT REJECTED"), "bad", 1)
+	status(tostring(result or "PLACEMENT REJECTED"), "bad", 1.5)
 end
 
 local function removePart()
@@ -223,24 +277,24 @@ local function removePart()
 		Action = "Remove",
 		MechId = targetMech,
 		ComponentId = component,
-	}, 5)
+	}, 8)
 
 	if success then
 		status("COMPONENT REMOVED", "good", 0.6)
 	else
-		status(tostring(result or "REMOVE REJECTED"), "bad", 1)
+		status(tostring(result or "REMOVE REJECTED"), "bad", 1.2)
 	end
 end
 
 local function applyHistory(action)
-	local success, result = invoke({ Action = action }, 5)
+	local success, result = invoke({ Action = action }, 8)
 	if success then
 		if type(result) == "table" and type(result.MechId) == "string" then
 			setActiveMech(result.MechId)
 		end
 		status(action, "good", 0.5)
 	else
-		status(tostring(result or "NOTHING TO APPLY"), "bad", 0.7)
+		status(tostring(result or "NOTHING TO APPLY"), "bad", 0.8)
 	end
 end
 
@@ -279,7 +333,16 @@ input = BuildInput.new(UserInputService, {
 player:SetAttribute("BuildMode", false)
 ui:SetBuildMode(false)
 preview:SetEnabled(false)
-selectPart(selectedPart)
+
+task.spawn(function()
+	local ready, reason = waitForBuilderReady(10)
+	if ready then
+		selectPart(selectedPart)
+	else
+		warn("[GOD MACHINES] Builder server unavailable:", reason)
+		status(reason or "SERVER NOT READY", "bad", 2)
+	end
+end)
 
 local renderConnection = RunService.RenderStepped:Connect(function()
 	if not buildMode then
