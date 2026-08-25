@@ -43,6 +43,7 @@ local lastSummaryAt = 0
 local summaryBusy = false
 local input = nil
 local currentBindings = {}
+local duplicateSourceId = nil
 
 local ui = BuildUI.new(playerGui, {})
 local preview = BuildPreview.new(mouse, BuildMath)
@@ -100,6 +101,7 @@ end
 
 local function setActiveMech(value, fromAttribute)
 	local normalized = normalizeMechId(value)
+	if normalized ~= mechId then duplicateSourceId = nil end
 	mechId = normalized
 	if fromAttribute ~= true and player:GetAttribute("ActiveMechId") ~= normalized then
 		player:SetAttribute("ActiveMechId", normalized)
@@ -121,9 +123,10 @@ local function componentFromTarget()
 	return targetMechId, componentId, if type(partType) == "string" then partType else nil
 end
 
-local function selectPart(partType)
+local function selectPart(partType, preserveDuplicate)
 	local definition = definitions[partType]
 	if not definition then status("PART UNAVAILABLE: " .. tostring(partType), "bad", 1.4); return false end
+	if preserveDuplicate ~= true then duplicateSourceId = nil end
 	if not preview:SetDefinition(definition) then status("INVALID PART DEFINITION", "bad", 1.2); return false end
 	selectedPart = partType
 	ui:SetSelectedPart(partType)
@@ -199,18 +202,32 @@ local function placePart()
 		status(readable[previewReason] or previewReason or "INVALID PLACEMENT", "bad", .8)
 		return
 	end
-	local success, result = buildInvoke({
-		Action="Place", MechId=mechId, PartType=selectedPart, Transform=data.Transform,
+	local duplicateActive = type(duplicateSourceId)=="string"
+	local request = {
+		Action=if duplicateActive then "Duplicate" else "Place",
+		MechId=mechId, PartType=selectedPart, Transform=data.Transform,
 		TargetComponentId=data.TargetComponentId, TargetNode=data.TargetNode, SourceNode=data.SourceNode,
 		Rotation=data.Rotation, MirrorX=data.MirrorX == true,
-	}, 8)
+	}
+	if duplicateActive then request.ComponentId=duplicateSourceId end
+	local success, result = buildInvoke(request, 8)
 	if success then
 		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
-		status("COMPONENT INSTALLED", "good", .55)
+		if duplicateActive then
+			status("DUPLICATE INSTALLED — COPY TOOL STILL ARMED", "good", .75)
+		else
+			status("COMPONENT INSTALLED", "good", .55)
+		end
 		return
 	end
 	preview:Reject()
-	status(tostring(result or "PLACEMENT REJECTED"), "bad", 1.2)
+	if duplicateActive and tostring(result)=="InvalidComponent" then
+		duplicateSourceId=nil
+		selectPart(selectedPart)
+		status("DUPLICATE SOURCE NO LONGER EXISTS — RE-ARM COPY TOOL", "bad", 1.3)
+	else
+		status(tostring(result or "PLACEMENT REJECTED"), "bad", 1.2)
+	end
 end
 
 local function removePart()
@@ -219,6 +236,7 @@ local function removePart()
 	if targetMech ~= mechId or not componentId then status("AIM AT ONE OF YOUR COMPONENTS", "bad", .8); return end
 	local success, result = buildInvoke({ Action="Remove", MechId=mechId, ComponentId=componentId }, 8)
 	if success then
+		if componentId==duplicateSourceId then duplicateSourceId=nil end
 		if type(result)=="table" and result.Empty==true then
 			setActiveMech(nil)
 			status("MACHINE CLEARED — PLACE A NEW FOUNDATION", "good", .85)
@@ -231,11 +249,24 @@ local function removePart()
 end
 
 local function duplicateTarget()
-	if not buildMode then return end
-	local targetMech, _, partType = componentFromTarget()
-	if targetMech ~= mechId or not partType or not definitions[partType] then status("AIM AT A COMPONENT TO DUPLICATE", "bad", .8); return end
-	selectPart(partType)
-	status("DUPLICATE ARMED — PLACE THE COPY", "good", .9)
+	if not buildMode or not mechId then return end
+	local targetMech, componentId, partType = componentFromTarget()
+	if targetMech ~= mechId or not componentId or not partType or not definitions[partType] then
+		status("AIM AT A COMPONENT TO DUPLICATE", "bad", .8)
+		return
+	end
+	local success, appearance = buildInvoke({Action="Appearance",MechId=mechId,ComponentId=componentId},6)
+	if not success or type(appearance)~="table" then
+		status(appearance or "COULD NOT READ COMPONENT APPEARANCE", "bad", 1)
+		return
+	end
+	local copyPart=appearance.PartType or partType
+	if not selectPart(copyPart,true) then return end
+	preview:SetPaint(appearance.Paint)
+	local mirrored=preview:SetMirror(appearance.MirrorX==true)
+	ui:SetMirrorState(mirrored)
+	duplicateSourceId=componentId
+	status("DUPLICATE ARMED — PLACE REPEATED COPIES", "good", 1)
 end
 
 local function paintTarget(region, color, material)
@@ -243,12 +274,18 @@ local function paintTarget(region, color, material)
 	local targetMech, componentId = componentFromTarget()
 	if targetMech ~= mechId or not componentId then status("AIM AT A COMPONENT TO PAINT", "bad", .8); return end
 	local success, result = buildInvoke({ Action="Paint", MechId=mechId, ComponentId=componentId, Region=region, Color=color, Material=material }, 8)
-	if success then status("PAINT APPLIED", "good", .55) else status(result or "PAINT REJECTED", "bad", 1) end
+	if success then
+		if componentId==duplicateSourceId and type(result)=="table" and type(result.Paint)=="table" then preview:SetPaint(result.Paint) end
+		status("PAINT APPLIED", "good", .55)
+	else
+		status(result or "PAINT REJECTED", "bad", 1)
+	end
 end
 
 local function applyHistory(action)
 	local success, result = buildInvoke({ Action=action }, 8)
 	if success then
+		duplicateSourceId=nil
 		if type(result)=="table" then
 			if result.Empty==true then setActiveMech(nil)
 			elseif type(result.MechId)=="string" then setActiveMech(result.MechId) end
@@ -312,6 +349,7 @@ local function loadBlueprint(name)
 	if name == "" then status("SELECT OR ENTER A BLUEPRINT NAME", "bad", .8); return end
 	local success, result = machineInvoke({ Action="LoadBlueprint", Name=name }, 8)
 	if not success then status(result or "BLUEPRINT LOAD FAILED", "bad", 1.2); return end
+	duplicateSourceId=nil
 	if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
 	machineMode = "Edit"
 	ui:SetMode("Edit")
@@ -442,8 +480,8 @@ local renderConnection = RunService.RenderStepped:Connect(function()
 		nodes:Update()
 		refreshSummary()
 		if os.clock() >= statusLockUntil then
-			if state=="SNAP" then ui:SetStatus("ATTACHMENT READY", "good")
-			elseif state=="FREE" then ui:SetStatus("FREE PLACEMENT", nil)
+			if state=="SNAP" then ui:SetStatus(if duplicateSourceId then "COPY READY" else "ATTACHMENT READY", "good")
+			elseif state=="FREE" then ui:SetStatus(if duplicateSourceId then "COPY FREE PLACEMENT" else "FREE PLACEMENT", nil)
 			elseif state=="ATTACHMENT_REQUIRED" then ui:SetStatus("ATTACH TO A GREEN NODE", "bad")
 			elseif state=="OTHER_MECH" then ui:SetStatus("OTHER MACHINE", "bad")
 			elseif state=="NO_COMPATIBLE_NODE" then ui:SetStatus("NO COMPATIBLE NODE", "bad")
