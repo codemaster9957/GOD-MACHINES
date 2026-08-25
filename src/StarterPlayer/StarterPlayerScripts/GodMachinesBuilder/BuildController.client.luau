@@ -41,6 +41,7 @@ local mechId = if type(activeAttribute) == "string" and activeAttribute ~= "" th
 local statusLockUntil = 0
 local lastSummaryAt = 0
 local summaryBusy = false
+local inventoryBusy = false
 local input = nil
 local currentBindings = {}
 local duplicateSourceId = nil
@@ -95,6 +96,21 @@ local function machineInvoke(request, timeoutSeconds)
 	return invokeRemote(machineRemote, "MachineServerReady", request, timeoutSeconds)
 end
 
+local function refreshInventory(silent)
+	if inventoryBusy then return false end
+	inventoryBusy=true
+	local success,result=buildInvoke({Action="Inventory"},4)
+	inventoryBusy=false
+	if success and type(result)=="table" then
+		ui:SetInventoryCounts(result)
+		local definition=definitions[selectedPart]
+		if definition then ui:SetInspector(selectedPart,definition) end
+		return true
+	end
+	if not silent then status(result or "INVENTORY REFRESH FAILED","bad",.8) end
+	return false
+end
+
 local function normalizeMechId(value)
 	return if type(value) == "string" and value ~= "" then value else nil
 end
@@ -146,6 +162,7 @@ local function setBuildVisible(enabled)
 	if buildMode then
 		nodes:SetMech(mechId)
 		selectPart(selectedPart)
+		task.spawn(function() refreshInventory(true) end)
 	else
 		statusLockUntil = 0
 	end
@@ -213,6 +230,7 @@ local function placePart()
 	local success, result = buildInvoke(request, 8)
 	if success then
 		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
+		task.spawn(function() refreshInventory(true) end)
 		if duplicateActive then
 			status("DUPLICATE INSTALLED — COPY TOOL STILL ARMED", "good", .75)
 		else
@@ -221,6 +239,7 @@ local function placePart()
 		return
 	end
 	preview:Reject()
+	if tostring(result):find("Inventory") or tostring(result):find("Repair") then task.spawn(function() refreshInventory(true) end) end
 	if duplicateActive and tostring(result)=="InvalidComponent" then
 		duplicateSourceId=nil
 		selectPart(selectedPart)
@@ -243,6 +262,7 @@ local function removePart()
 		else
 			status("COMPONENT REMOVED", "good", .55)
 		end
+		task.spawn(function() refreshInventory(true) end)
 	else
 		status(result or "REMOVE REJECTED", "bad", 1)
 	end
@@ -290,6 +310,7 @@ local function applyHistory(action)
 			if result.Empty==true then setActiveMech(nil)
 			elseif type(result.MechId)=="string" then setActiveMech(result.MechId) end
 		end
+		task.spawn(function() refreshInventory(true) end)
 		status(action, "good", .45)
 	else
 		status(result or "NOTHING TO APPLY", "bad", .65)
@@ -348,12 +369,17 @@ local function loadBlueprint(name)
 	name = tostring(name or ""):match("^%s*(.-)%s*$")
 	if name == "" then status("SELECT OR ENTER A BLUEPRINT NAME", "bad", .8); return end
 	local success, result = machineInvoke({ Action="LoadBlueprint", Name=name }, 8)
-	if not success then status(result or "BLUEPRINT LOAD FAILED", "bad", 1.2); return end
+	if not success then
+		if tostring(result):find("Inventory") or tostring(result):find("Repair") then task.spawn(function() refreshInventory(true) end) end
+		status(result or "BLUEPRINT LOAD FAILED", "bad", 1.2)
+		return
+	end
 	duplicateSourceId=nil
 	if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
 	machineMode = "Edit"
 	ui:SetMode("Edit")
 	setBuildVisible(true)
+	task.spawn(function() refreshInventory(true) end)
 	status("BLUEPRINT DEPLOYED: " .. name, "good", 1)
 end
 
@@ -434,6 +460,7 @@ ui.Callbacks.DeleteBlueprint = deleteBlueprint
 ui.Callbacks.BindTarget = bindTarget
 ui.Callbacks.AutoBindings = autoBindings
 ui:SetCatalog(catalog, categories)
+ui:SetInventoryCounts({})
 ui:SetMode("Edit")
 ui:SetMachineReady(false)
 ui:SetMirrorState(false)
@@ -461,6 +488,7 @@ framework:GetAttributeChangedSignal("MachineServerReady"):Connect(updateMachineR
 task.spawn(function()
 	local ready, reason = waitForReady("BuilderServerReady", 10)
 	if ready then
+		refreshInventory(true)
 		selectPart(selectedPart)
 	else
 		warn("[GOD MACHINES] Builder unavailable:", reason)
