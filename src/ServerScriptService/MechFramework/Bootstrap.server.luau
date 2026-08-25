@@ -40,6 +40,7 @@ local CORE_ORDER = {
 local OPTIONAL_ORDER = {
 	"DestructionService",
 	"DamageService",
+	"FuelService",
 	"PowerService",
 	"HeatService",
 	"SaveService",
@@ -56,7 +57,12 @@ local OPTIONAL_ORDER = {
 	"NetworkService",
 }
 
+-- Test/battle machine mode is only advertised when every engineering layer that directly
+-- affects movement and survivability is healthy. The core builder can still operate alone.
 local MACHINE_REQUIRED = {
+	"FuelService",
+	"PowerService",
+	"HeatService",
 	"ControlService",
 	"PilotService",
 	"VehicleService",
