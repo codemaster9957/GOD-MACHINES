@@ -28,6 +28,9 @@ function Pilot:Init(container:any)
 	self._heat=container:Get("HeatService")
 	self._remote=game.ReplicatedStorage.MechFramework.Remotes.Functions.RequestMachineAction
 end
+function Pilot:_profileReady(player:Player):boolean
+	return self._save:IsReady(player.UserId) and player:GetAttribute("GMProfileReady")==true
+end
 function Pilot:_hasRemoteCore(mechId:string):boolean
 	local mech=self._mechs:Get(mechId); if not mech then return false end
 	for _,component in pairs(mech.Components) do if not component.Destroyed and component.Pilot and component.Pilot.Remote==true then return true end end; return false
@@ -69,10 +72,7 @@ local function compactComponent(id:string,component:any,origin:CFrame):any
 		Id=id,
 		PartType=component.PartType,
 		LocalTransform=origin:ToObjectSpace(component.LocalTransform),
-		Metadata={
-			Paint=clone(meta.Paint or {}),
-			MirrorX=meta.MirrorX==true,
-		},
+		Metadata={Paint=clone(meta.Paint or {}),MirrorX=meta.MirrorX==true},
 	}
 end
 
@@ -85,6 +85,7 @@ local function compactConnections(connections:any):any
 end
 
 function Pilot:_blueprint(player:Player,mechId:string,name:string):(boolean,any)
+	if not self:_profileReady(player) then return false,"ProfileLoading" end
 	if not self._mechs:IsOwner(player.UserId,mechId) then return false,"NotAuthorized" end
 	if #name<1 or #name>40 then return false,"InvalidBlueprintName" end
 	local snapshot=self._mechs:Snapshot(mechId,player.UserId); local model=assemblyModel(mechId)
@@ -102,6 +103,7 @@ function Pilot:_blueprint(player:Player,mechId:string,name:string):(boolean,any)
 end
 
 function Pilot:_spawnBlueprint(player:Player,name:string):(boolean,any)
+	if not self:_profileReady(player) then return false,"ProfileLoading" end
 	if #name<1 or #name>40 then return false,"InvalidBlueprintName" end
 	local blueprint=self._save:GetBlueprint(player.UserId,name); if not blueprint then return false,"BlueprintNotFound" end
 	local character=player.Character; local hrp=character and character:FindFirstChild("HumanoidRootPart")
@@ -145,11 +147,16 @@ function Pilot:Start()
 		if action=="SetMode" then
 			if type(request.MechId)~="string" or (request.Mode~="Edit" and request.Mode~="Test") then return false,"BadModeRequest" end; return self:_setEditMode(player,request.MechId,request.Mode=="Edit")
 		elseif action=="SaveBlueprint" then
+			if not self:_profileReady(player) then return false,"ProfileLoading" end
 			if type(request.MechId)~="string" or type(request.Name)~="string" then return false,"BadBlueprintRequest" end; return self:_blueprint(player,request.MechId,request.Name)
 		elseif action=="LoadBlueprint" then
+			if not self:_profileReady(player) then return false,"ProfileLoading" end
 			if type(request.Name)~="string" then return false,"BadBlueprintRequest" end; return self:_spawnBlueprint(player,request.Name)
-		elseif action=="ListBlueprints" then return true,self._save:ListBlueprints(player.UserId)
+		elseif action=="ListBlueprints" then
+			if not self:_profileReady(player) then return false,"ProfileLoading" end
+			return true,self._save:ListBlueprints(player.UserId)
 		elseif action=="DeleteBlueprint" then
+			if not self:_profileReady(player) then return false,"ProfileLoading" end
 			if type(request.Name)~="string" then return false,"BadBlueprintRequest" end; local removed=self._save:DeleteBlueprint(player.UserId,request.Name); return removed,if removed then "Deleted" else "BlueprintNotFound"
 		elseif action=="GetBindings" then
 			if type(request.MechId)~="string" or not self._mechs:IsOwner(player.UserId,request.MechId) then return false,"NotAuthorized" end; return true,self._control:GetBindings(request.MechId)
