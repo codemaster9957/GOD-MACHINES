@@ -1,5 +1,6 @@
 --!strict
 -- Abstract actions bind to component groups; clients submit intent, never forces or damage.
+-- Trusted server systems such as AI use the same abstract action path, bypassing only player-seat validation.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -57,7 +58,7 @@ function Control:SetBindings(userId: number, mechId: string, groups: {[string]: 
 		end
 	end
 	self._groups[mechId] = clean
-	if custom == true then self._custom[mechId] = true end
+	if custom == true then self._custom[mechId] = true elseif custom == false then self._custom[mechId] = nil end
 	return true
 end
 
@@ -106,6 +107,7 @@ function Control:GenerateDefaultBindings(userId: number, mechId: string, force: 
 		for _, declared in ipairs(component.Controls or {}) do if declared == "Utility" then add(groups,"Utility",componentId) end end
 	end
 	self._groups[mechId] = groups
+	if force == true then self._custom[mechId] = nil end
 	return groups
 end
 
@@ -144,6 +146,17 @@ function Control:ClearMech(mechId: string)
 	for key,state in pairs(self._held) do if state.MechId==mechId then self:_deactivate(mechId,state.Action); self._held[key]=nil end end
 	local mech=self._mechs:Get(mechId)
 	if mech then for _,component in pairs(mech.Components) do if component.Metadata then component.Metadata.ControlState={} end end end
+end
+
+-- Trusted-server intent path for AI/tutorial/autopilot systems. It deliberately shares the
+-- exact same component groups and state mutation as player controls, so AI cannot bypass
+-- vehicle, propulsion, power or aerodynamic simulation rules.
+function Control:SetServerAction(mechId: string, action: string, active: boolean, aim: any?): boolean
+	if type(mechId) ~= "string" or not VALID_ACTIONS[action] or type(active) ~= "boolean" then return false end
+	local mech = self._mechs:Get(mechId)
+	if not mech then return false end
+	if active then self:_activate(mech.Owner, mechId, action, aim) else self:_deactivate(mechId, action) end
+	return true
 end
 
 function Control:Dispatch(player: Player, packet: any)
