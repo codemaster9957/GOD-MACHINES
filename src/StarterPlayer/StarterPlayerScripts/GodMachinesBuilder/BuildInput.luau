@@ -40,6 +40,14 @@ function BuildInput.new(UserInputService, callbacks)
 		if input.KeyCode == Enum.KeyCode.KeypadThree then callbacks.CameraView("Right"); return end
 		if input.KeyCode == Enum.KeyCode.KeypadSeven then callbacks.CameraView("Top"); return end
 
+		-- Construction orientation/snap helpers deliberately avoid X/Y because those are remove/redo.
+		if input.KeyCode == Enum.KeyCode.G then callbacks.CycleRotationAxis(); return end
+		if input.KeyCode == Enum.KeyCode.N then
+			local backwards = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+			callbacks.CycleSnap(if backwards then -1 else 1)
+			return
+		end
+
 		if input.KeyCode == Enum.KeyCode.R then callbacks.Rotate(); return end
 		if input.KeyCode == Enum.KeyCode.M then callbacks.Mirror(); return end
 		if input.KeyCode == Enum.KeyCode.X or input.KeyCode == Enum.KeyCode.Delete then callbacks.Remove(); return end
