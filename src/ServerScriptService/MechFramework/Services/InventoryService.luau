@@ -35,9 +35,7 @@ local function bump(record: any) record.Revision += 1 end
 
 local function pruneTransactions(record: any)
 	local entries = {}
-	for id, timestamp in pairs(record.AppliedTransactions or {}) do
-		table.insert(entries, {Id=id, Time=tonumber(timestamp) or 0})
-	end
+	for id, timestamp in pairs(record.AppliedTransactions or {}) do table.insert(entries, {Id=id, Time=tonumber(timestamp) or 0}) end
 	if #entries <= MAX_APPLIED_TRANSACTIONS then return end
 	table.sort(entries, function(a,b) return if a.Time==b.Time then a.Id<b.Id else a.Time<b.Time end)
 	for index=1,#entries-MAX_APPLIED_TRANSACTIONS do record.AppliedTransactions[entries[index].Id]=nil end
@@ -121,6 +119,71 @@ function Inventory:Start()
 	if not (RunService:IsStudio() and Config.Debug) then return end
 	Players.PlayerAdded:Connect(function(player) self:EnsureStudioBuildInventory(player.UserId) end)
 	for _, player in ipairs(Players:GetPlayers()) do self:EnsureStudioBuildInventory(player.UserId) end
+end
+
+-- Exact single-part receipt used by construction so non-stackable identity/modifiers survive a build round-trip.
+function Inventory:ConsumeOne(userId: number, partType: string): (boolean, any)
+	local metadata = self:GetPartMetadata(partType)
+	if not metadata then return false,"UnknownPartType" end
+	local canonical = metadata.Id
+	local record = ledger(self,userId)
+	local stacked = tonumber(record.Stacks[canonical]) or 0
+	if stacked > 0 then
+		record.Stacks[canonical]=stacked-1
+		bump(record)
+		return true,{Kind="Stack",PartType=canonical}
+	end
+	local ids={}
+	for id,item in pairs(record.Unique) do if item.PartType==canonical then table.insert(ids,id) end end
+	table.sort(ids)
+	local id=ids[1]
+	if not id then return false,"InsufficientInventory" end
+	local item=record.Unique[id]
+	record.Unique[id]=nil
+	bump(record)
+	return true,{Kind="Unique",PartType=canonical,Item=clone(item)}
+end
+
+function Inventory:RestorePartReceipt(userId: number, receipt: any): boolean
+	if type(receipt)~="table" or type(receipt.PartType)~="string" then return false end
+	local metadata=self:GetPartMetadata(receipt.PartType)
+	if not metadata then return false end
+	local canonical=metadata.Id
+	local record=ledger(self,userId)
+	if receipt.Kind=="Stack" then
+		record.Stacks[canonical]=(record.Stacks[canonical] or 0)+1
+		bump(record)
+		return true
+	end
+	if receipt.Kind=="Unique" and type(receipt.Item)=="table" then
+		local item=clone(receipt.Item)
+		local id=tostring(item.UniqueId or "")
+		if id=="" or record.Unique[id]~=nil then return false end
+		item.UniqueId=id; item.PartType=canonical; item.OwnerUserId=userId
+		item.MaxDurability=math.max(1,math.floor(tonumber(item.MaxDurability) or metadata.MaxDurability))
+		item.Durability=math.clamp(math.floor(tonumber(item.Durability) or item.MaxDurability),0,item.MaxDurability)
+		record.Unique[id]=item
+		bump(record)
+		return true
+	end
+	return false
+end
+
+function Inventory:ReturnBuiltPart(userId: number, partType: string, receipt: any, conditionRatio: number?): boolean
+	local metadata=self:GetPartMetadata(partType)
+	if not metadata then return false end
+	if type(receipt)=="table" and receipt.PartType==metadata.Id then
+		local copyReceipt=clone(receipt)
+		if copyReceipt.Kind=="Unique" and type(copyReceipt.Item)=="table" then
+			local maxDurability=math.max(1,math.floor(tonumber(copyReceipt.Item.MaxDurability) or metadata.MaxDurability))
+			local ratio=math.clamp(tonumber(conditionRatio) or 1,0,1)
+			copyReceipt.Item.MaxDurability=maxDurability
+			copyReceipt.Item.Durability=math.floor(maxDurability*ratio+.5)
+		end
+		return self:RestorePartReceipt(userId,copyReceipt)
+	end
+	self:GrantPart(userId,metadata.Id,1,{Source="BuildReturn",Condition=math.clamp(tonumber(conditionRatio) or 1,0,1)})
+	return true
 end
 
 function Inventory:Consume(userId: number, partType: string, amount: number): boolean
@@ -235,17 +298,13 @@ function Inventory:Restore(userId: number, snapshot: any)
 		end
 		restored.Revision = math.max(0,math.floor(tonumber(snapshot.Revision) or 0))
 		for transactionId, timestamp in pairs(snapshot.AppliedTransactions or {}) do
-			if type(transactionId)=="string" and transactionId~="" and #transactionId<=MAX_TRANSACTION_ID_LENGTH and type(timestamp)=="number" and timestamp>=0 then
-				restored.AppliedTransactions[transactionId]=timestamp
-			end
+			if type(transactionId)=="string" and transactionId~="" and #transactionId<=MAX_TRANSACTION_ID_LENGTH and type(timestamp)=="number" and timestamp>=0 then restored.AppliedTransactions[transactionId]=timestamp end
 		end
 		pruneTransactions(restored)
 	else
 		for partType, amount in pairs(snapshot) do
 			local metadata = if type(partType) == "string" then self:GetPartMetadata(partType) else nil
-			if metadata and type(amount) == "number" and amount >= 0 and amount % 1 == 0 then
-				restored.Stacks[metadata.Id] = (restored.Stacks[metadata.Id] or 0) + amount
-			end
+			if metadata and type(amount) == "number" and amount >= 0 and amount % 1 == 0 then restored.Stacks[metadata.Id] = (restored.Stacks[metadata.Id] or 0) + amount end
 		end
 	end
 	self._players[userId] = restored
