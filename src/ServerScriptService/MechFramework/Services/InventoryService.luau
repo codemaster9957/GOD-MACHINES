@@ -58,6 +58,7 @@ function Inventory:GetPartMetadata(partType: string): any?
 	}
 end
 
+-- Total collection ownership, including broken unique components that may still be repaired/salvaged.
 function Inventory:GetCount(userId: number, partType: string): number
 	local metadata = self:GetPartMetadata(partType)
 	if not metadata then return 0 end
@@ -65,6 +66,19 @@ function Inventory:GetCount(userId: number, partType: string): number
 	local record = ledger(self, userId)
 	local count = tonumber(record.Stacks[canonical]) or 0
 	for _, item in pairs(record.Unique) do if item.PartType == canonical then count += 1 end end
+	return count
+end
+
+-- Construction-ready ownership. Zero-durability unique items remain owned but cannot be installed.
+function Inventory:GetBuildableCount(userId: number, partType: string): number
+	local metadata = self:GetPartMetadata(partType)
+	if not metadata then return 0 end
+	local canonical = metadata.Id
+	local record = ledger(self, userId)
+	local count = math.max(0, tonumber(record.Stacks[canonical]) or 0)
+	for _, item in pairs(record.Unique) do
+		if item.PartType == canonical and (tonumber(item.Durability) or 0) > 0 then count += 1 end
+	end
 	return count
 end
 
@@ -108,7 +122,7 @@ function Inventory:EnsureStudioBuildInventory(userId: number)
 	local grantedKinds = 0
 	for _, definition in ipairs(self._parts:GetList()) do
 		local desired = if definition.Stackable == false then STUDIO_UNIQUE_AMOUNT else STUDIO_STACK_AMOUNT
-		local current = self:GetCount(userId, definition.Id)
+		local current = self:GetBuildableCount(userId, definition.Id)
 		if current < desired then self:GrantPart(userId, definition.Id, desired - current, { Source = "StudioDebug" }) end
 		grantedKinds += 1
 	end
@@ -133,13 +147,18 @@ function Inventory:ConsumeOne(userId: number, partType: string): (boolean, any)
 		bump(record)
 		return true,{Kind="Stack",PartType=canonical}
 	end
-	local ids={}
-	for id,item in pairs(record.Unique) do if item.PartType==canonical then table.insert(ids,id) end end
-	table.sort(ids)
-	local id=ids[1]
-	if not id then return false,"InsufficientInventory" end
-	local item=record.Unique[id]
-	record.Unique[id]=nil
+
+	-- Prefer the most worn usable item so pristine rare copies are not consumed before damaged ones.
+	local candidates={}
+	for id,item in pairs(record.Unique) do
+		local durability=tonumber(item.Durability) or 0
+		if item.PartType==canonical and durability>0 then table.insert(candidates,{Id=id,Durability=durability}) end
+	end
+	table.sort(candidates,function(a,b) return if a.Durability==b.Durability then a.Id<b.Id else a.Durability<b.Durability end)
+	local selected=candidates[1]
+	if not selected then return false,"InsufficientInventory" end
+	local item=record.Unique[selected.Id]
+	record.Unique[selected.Id]=nil
 	bump(record)
 	return true,{Kind="Unique",PartType=canonical,Item=clone(item)}
 end
@@ -190,19 +209,22 @@ function Inventory:Consume(userId: number, partType: string, amount: number): bo
 	local metadata = self:GetPartMetadata(partType)
 	if not metadata or amount <= 0 or amount % 1 ~= 0 then return false end
 	local canonical = metadata.Id
-	if self:GetCount(userId, canonical) < amount then return false end
+	if self:GetBuildableCount(userId, canonical) < amount then return false end
 	local record = ledger(self, userId)
 	local stacked = tonumber(record.Stacks[canonical]) or 0
 	local fromStack = math.min(stacked, amount)
 	local neededUnique = amount - fromStack
-	local ids = {}
+	local candidates = {}
 	if neededUnique > 0 then
-		for id, item in pairs(record.Unique) do if item.PartType == canonical then table.insert(ids, id) end end
-		table.sort(ids)
-		if #ids < neededUnique then return false end
+		for id, item in pairs(record.Unique) do
+			local durability=tonumber(item.Durability) or 0
+			if item.PartType == canonical and durability>0 then table.insert(candidates,{Id=id,Durability=durability}) end
+		end
+		table.sort(candidates,function(a,b) return if a.Durability==b.Durability then a.Id<b.Id else a.Durability<b.Durability end)
+		if #candidates < neededUnique then return false end
 	end
 	if fromStack > 0 then record.Stacks[canonical] = stacked - fromStack end
-	for index = 1, neededUnique do record.Unique[ids[index]] = nil end
+	for index = 1, neededUnique do record.Unique[candidates[index].Id] = nil end
 	bump(record)
 	return true
 end
