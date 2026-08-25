@@ -91,7 +91,12 @@ function Pilot:_blueprint(player:Player,mechId:string,name:string):(boolean,any)
 	if not snapshot or not model or not model.PrimaryPart then return false,"MachineNotReady" end
 	local origin=model.PrimaryPart.CFrame; local components={}
 	for id,component in pairs(snapshot.Components) do components[id]=compactComponent(id,component,origin) end
-	local blueprint={Id=name,Name=name,Components=components,Connections=compactConnections(snapshot.Connections),Controls=self._control:GetBindings(mechId),SavedAt=os.time()}
+	local primaryId=snapshot.Metadata and snapshot.Metadata.PrimaryComponentId
+	if type(primaryId)~="string" or components[primaryId]==nil then primaryId=nil end
+	local blueprint={
+		Id=name,Name=name,Components=components,Connections=compactConnections(snapshot.Connections),
+		Controls=self._control:GetBindings(mechId),PrimaryComponentId=primaryId,SavedAt=os.time(),
+	}
 	local ok,reason=self._save:SetBlueprint(player.UserId,name,blueprint)
 	return ok,if ok then {Name=name,PartCount=componentCount(components)} else reason
 end
@@ -101,7 +106,9 @@ function Pilot:_spawnBlueprint(player:Player,name:string):(boolean,any)
 	local blueprint=self._save:GetBlueprint(player.UserId,name); if not blueprint then return false,"BlueprintNotFound" end
 	local character=player.Character; local hrp=character and character:FindFirstChild("HumanoidRootPart")
 	if not hrp or not hrp:IsA("BasePart") then return false,"CharacterNotReady" end
-	local ok,result=self._build:SpawnBlueprint(player.UserId,blueprint,hrp.CFrame*CFrame.new(0,1,-12),{BuildOrigin=true,BattleSpawn=false})
+	local ok,result=self._build:SpawnBlueprint(player.UserId,blueprint,hrp.CFrame*CFrame.new(0,1,-12),{
+		BuildOrigin=true,BattleSpawn=false,ConsumeInventory=true,
+	})
 	if not ok then return false,result end
 	local mechId=result; player:SetAttribute("ActiveMechId",mechId)
 	if type(blueprint.Controls)=="table" then self._control:SetBindings(player.UserId,mechId,blueprint.Controls,true) else self._control:GenerateDefaultBindings(player.UserId,mechId,true) end
