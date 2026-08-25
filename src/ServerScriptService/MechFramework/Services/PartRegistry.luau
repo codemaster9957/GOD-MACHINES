@@ -4,19 +4,21 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PartCatalog = require(ReplicatedStorage.MechFramework.Shared.PartCatalog)
 
+local LEGACY_ALIASES = table.freeze({
+	LightweightEngine = "SmallCombustionEngine",
+	CompositePlate = "CompositeShell",
+	PrototypeThruster = "VectorThruster",
+})
+
 local Registry: any = {
 	_definitions = {} :: {[string]: any},
 	_ordered = {} :: {any},
 }
 
 local function clone(value: any): any
-	if type(value) ~= "table" then
-		return value
-	end
+	if type(value) ~= "table" then return value end
 	local out: {[any]: any} = {}
-	for key, item in pairs(value) do
-		out[key] = clone(item)
-	end
+	for key, item in pairs(value) do out[key] = clone(item) end
 	return out
 end
 
@@ -40,9 +42,7 @@ function Registry:Register(partType: string, definition: any)
 		assert(type(attachmentNode.Type) == "string" and attachmentNode.Type ~= "", "Attachment node requires a Type")
 		assert(typeof(attachmentNode.Transform) == "CFrame", "Attachment node requires a CFrame Transform")
 		assert(type(attachmentNode.Accepts) == "table" and #attachmentNode.Accepts > 0, "Attachment node requires Accepts")
-		if attachmentNode.CompatibleWith == nil then
-			attachmentNode.CompatibleWith = clone(attachmentNode.Accepts)
-		end
+		if attachmentNode.CompatibleWith == nil then attachmentNode.CompatibleWith = clone(attachmentNode.Accepts) end
 		names[attachmentNode.Name] = true
 	end
 
@@ -51,13 +51,21 @@ function Registry:Register(partType: string, definition: any)
 	table.insert(self._ordered, stored)
 end
 
+function Registry:ResolveId(partType: string): string?
+	if self._definitions[partType] then return partType end
+	local alias = LEGACY_ALIASES[partType]
+	if alias and self._definitions[alias] then return alias end
+	return nil
+end
+
 function Registry:Get(partType: string): any?
-	local definition = self._definitions[partType]
+	local canonical = self:ResolveId(partType)
+	local definition = canonical and self._definitions[canonical] or nil
 	return if definition then clone(definition) else nil
 end
 
 function Registry:Has(partType: string): boolean
-	return self._definitions[partType] ~= nil
+	return self:ResolveId(partType) ~= nil
 end
 
 function Registry:GetAll(): {[string]: any}
@@ -68,23 +76,23 @@ function Registry:GetList(): {any}
 	return clone(self._ordered)
 end
 
+function Registry:GetLegacyAliases(): {[string]: string}
+	return clone(LEGACY_ALIASES)
+end
+
 function Registry:Count(): number
 	return #self._ordered
 end
 
 function Registry:Init()
-	if next(self._definitions) ~= nil then
-		return
-	end
-
+	if next(self._definitions) ~= nil then return end
 	local valid, reason = PartCatalog.Validate()
 	assert(valid, "[PartRegistry] Shared PartCatalog invalid: " .. tostring(reason))
-
-	for _, definition in ipairs(PartCatalog.GetList()) do
-		self:Register(definition.Id, definition)
-	end
-
+	for _, definition in ipairs(PartCatalog.GetList()) do self:Register(definition.Id, definition) end
 	assert(self:Count() == 100, string.format("[PartRegistry] Expected 100 registered parts, got %d", self:Count()))
+	for legacy, canonical in pairs(LEGACY_ALIASES) do
+		assert(self._definitions[canonical] ~= nil, string.format("[PartRegistry] Legacy alias %s points to missing %s", legacy, canonical))
+	end
 	print("[MechFramework] PartRegistry loaded", self:Count(), "build pieces")
 end
 
