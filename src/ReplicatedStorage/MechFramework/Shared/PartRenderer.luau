@@ -1,5 +1,6 @@
 --!strict
 -- Deterministic procedural renderer shared by runtime machines and client previews.
+-- Spinner roles are assembled around one motorized pivot so multi-piece wheels, fans and rotors move as a unit.
 
 local Renderer = {}
 
@@ -49,6 +50,26 @@ local function applyIdentity(instance: Instance, attributes: any)
 	end
 end
 
+local function resolvedRole(definition: any, item: any): string
+	if type(item.Role)=="string" and item.Role~="" then return item.Role end
+	-- Early propeller recipes predate explicit roles on generated blade geometry. Treat blade/fan
+	-- geometry as part of the propeller rotor rather than leaving the blades welded to the chassis.
+	local propulsion=definition.Propulsion
+	if propulsion and (propulsion.Kind=="Propeller" or propulsion.Kind=="LiftFan") then
+		local name=tostring(item.Name or "")
+		if string.match(name,"^Blade") or string.match(name,"^Fan") or string.match(name,"^LiftBlade") then return "PropellerSpinner" end
+	end
+	return ""
+end
+
+local function weld(part0: BasePart, part1: BasePart, parent: Instance, name: string)
+	local joint=Instance.new("WeldConstraint")
+	joint.Name=name
+	joint.Part0=part0
+	joint.Part1=part1
+	joint.Parent=parent
+end
+
 function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	assert(type(definition)=="table" and typeof(definition.Size)=="Vector3","PartRenderer requires a valid definition")
 	options=options or {}
@@ -70,8 +91,8 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	root.Material=Enum.Material.SmoothPlastic
 	root.CastShadow=false
 	root.Anchored=mode=="Preview" or options.Anchored==true
-	-- Pilot modules need an accessible seat. Their invisible bounding root remains the physical mass/root,
-	-- but does not form an impenetrable box around the pilot.
+	-- Pilot modules need an accessible seat. The invisible root remains the physical mass/root,
+	-- but must not form an impenetrable box around the avatar.
 	root.CanCollide=mode=="Runtime" and definition.Pilot==nil
 	root.CanTouch=mode=="Runtime"
 	root.CanQuery=mode=="Runtime"
@@ -85,7 +106,8 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	for _,node in ipairs(definition.AttachmentNodes or {}) do
 		if type(node)=="table" and type(node.Name)=="string" and typeof(node.Transform)=="CFrame" then
 			local attachment=Instance.new("Attachment")
-			attachment.Name=node.Name; attachment.CFrame=node.Transform
+			attachment.Name=node.Name
+			attachment.CFrame=node.Transform
 			attachment:SetAttribute("BuildNode",true)
 			attachment:SetAttribute("NodeType",tostring(node.Type or ""))
 			local compatibility={}
@@ -98,13 +120,17 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	end
 
 	local visuals=Instance.new("Folder")
-	visuals.Name="Visuals"; visuals.Parent=model
+	visuals.Name="Visuals"
+	visuals.Parent=model
+	local spinnerGroups: {[string]: {any}} = {}
+
 	for _,item in ipairs(definition.Geometry or {}) do
 		local visual=makeVisual(tostring(item.Kind or "Block"))
 		visual.Name=tostring(item.Name or "Visual")
 		visual.Size=item.Size
 		visual.CFrame=transform*item.CFrame
 		local region=tostring(item.Region or "Primary")
+		local role=resolvedRole(definition,item)
 		visual.Color=regionColor(definition,paint,region)
 		local material=item.Material
 		if mode=="Runtime" and type(paint)=="table" and paint.Material~=nil and region~="Glass" then material=paint.Material end
@@ -120,24 +146,61 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 		visual:SetAttribute("GMVisual",true)
 		visual:SetAttribute("PaintRegion",region)
 		visual:SetAttribute("BaseColor",visual.Color)
-		visual:SetAttribute("Role",tostring(item.Role or ""))
+		visual:SetAttribute("Role",role)
 		applyIdentity(visual,options.Attributes)
 		configureVehicleSeat(visual)
 		visual.Parent=visuals
 
 		if mode=="Runtime" then
-			if type(item.Role)=="string" and item.Role~="" and string.find(item.Role,"Spinner") then
-				local motor=Instance.new("Motor6D")
-				motor.Name=item.Role.."Motor"; motor.Part0=root; motor.Part1=visual; motor.C0=item.CFrame; motor.C1=CFrame.identity
-				motor:SetAttribute("Role",item.Role); motor.Parent=root
+			if role~="" and string.find(role,"Spinner") then
+				spinnerGroups[role]=spinnerGroups[role] or {}
+				table.insert(spinnerGroups[role],{Visual=visual,Item=item})
 			else
-				local weld=Instance.new("WeldConstraint")
-				weld.Name="VisualWeld_"..visual.Name; weld.Part0=root; weld.Part1=visual; weld.Parent=root
+				weld(root,visual,root,"VisualWeld_"..visual.Name)
 			end
 		else
 			visual.Transparency=math.max(visual.Transparency,.35)
 		end
 	end
+
+	if mode=="Runtime" then
+		for role,records in pairs(spinnerGroups) do
+			if #records==0 then continue end
+			-- Prefer the first hub/rotor/flywheel as the shaft pivot; otherwise the first tagged visual.
+			local pivotRecord=records[1]
+			for _,record in ipairs(records) do
+				local name=tostring(record.Item.Name or "")
+				if string.find(name,"Hub") or string.find(name,"Rotor") or string.find(name,"Flywheel") or string.find(name,"Core") then pivotRecord=record; break end
+			end
+			local pivotLocal=pivotRecord.Item.CFrame
+			local pivot=Instance.new("Part")
+			pivot.Name=role.."Pivot"
+			pivot.Size=Vector3.new(.12,.12,.12)
+			pivot.CFrame=transform*pivotLocal
+			pivot.Transparency=1
+			pivot.CastShadow=false
+			pivot.CanCollide=false
+			pivot.CanQuery=false
+			pivot.CanTouch=false
+			pivot.Massless=true
+			pivot.Anchored=false
+			pivot:SetAttribute("SpinnerPivot",true)
+			pivot:SetAttribute("Role",role)
+			pivot.Parent=visuals
+
+			local motor=Instance.new("Motor6D")
+			motor.Name=role.."Motor"
+			motor.Part0=root
+			motor.Part1=pivot
+			motor.C0=pivotLocal
+			motor.C1=CFrame.identity
+			motor:SetAttribute("Role",role)
+			motor.Parent=root
+
+			for _,record in ipairs(records) do weld(pivot,record.Visual,pivot,"RotorWeld_"..record.Visual.Name) end
+		end
+	end
+
 	if typeof(options.Parent)=="Instance" then model.Parent=options.Parent end
 	return model,root
 end
@@ -147,7 +210,8 @@ function Renderer.ApplyPaint(model: Model, definition: any, paint: any)
 		if descendant:IsA("BasePart") and descendant:GetAttribute("GMVisual")==true then
 			local region=tostring(descendant:GetAttribute("PaintRegion") or "Primary")
 			local color=regionColor(definition,paint,region)
-			descendant.Color=color; descendant:SetAttribute("BaseColor",color)
+			descendant.Color=color
+			descendant:SetAttribute("BaseColor",color)
 			if type(paint)=="table" and paint.Material~=nil and region~="Glass" then descendant.Material=safeMaterial(paint.Material,descendant.Material) end
 		end
 	end
