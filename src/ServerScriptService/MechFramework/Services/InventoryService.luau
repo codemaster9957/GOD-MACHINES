@@ -6,16 +6,21 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 
-local Definitions = require(game.ReplicatedStorage.MechFramework.Shared.CollectionDefinitions)
-local Config = require(game.ReplicatedStorage.MechFramework.Shared.FrameworkConfig)
+local Shared = game.ReplicatedStorage.MechFramework.Shared
+local Definitions = require(Shared.CollectionDefinitions)
+local WeaponCatalog = require(Shared.WeaponCatalog)
+local Config = require(Shared.FrameworkConfig)
 
 local Inventory: any = { _players = {} }
 
 local STUDIO_BUILD_PARTS = {
 	"StructuralFrame",
 	"SmallReactor",
-	"Autocannon",
 }
+
+for _, weapon in ipairs(WeaponCatalog.Ordered) do
+	table.insert(STUDIO_BUILD_PARTS, weapon.Id)
+end
 
 local STUDIO_BUILD_AMOUNT = 25
 
