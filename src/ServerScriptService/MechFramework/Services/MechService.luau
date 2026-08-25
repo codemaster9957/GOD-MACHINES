@@ -95,6 +95,8 @@ function MechService:AddComponent(mechId: string, ownerId: number, partType: str
 		Utility=copy(definition.Utility), Controls=copy(definition.Controls), Combat=copy(definition.Combat),
 		Destroyed=false, DamageState="Operational", Metadata=componentMetadata,
 	}
+	mech.Metadata = mech.Metadata or {}
+	if type(mech.Metadata.PrimaryComponentId)~="string" or not mech.Components[mech.Metadata.PrimaryComponentId] then mech.Metadata.PrimaryComponentId=id end
 	mech.Adjacency[id] = {}
 	mech.Revision += 1
 	mech.LastActiveAt = os.clock()
