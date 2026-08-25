@@ -19,6 +19,7 @@ local CATEGORY_ORDER = table.freeze({
 
 local MODULES = {
 	"Structural",
+	"StructuralBasics",
 	"Armour",
 	"Mobility",
 	"Propulsion",
@@ -28,6 +29,19 @@ local MODULES = {
 	"Weapons",
 	"Utility",
 }
+
+local REQUIRED_IDS = table.freeze({
+	StructuralFrame=true,
+	SmallReactor=true,
+	Autocannon=true,
+	StudBlock=true,
+	HalfStudBlock=true,
+	LongStudBeam=true,
+	StructuralPlate=true,
+	CornerBlock=true,
+	TriangularBlock=true,
+	RoundStructuralCell=true,
+})
 
 local VALID_GEOMETRY_KINDS = table.freeze({
 	Block=true, Wedge=true, CornerWedge=true, Cylinder=true, Ball=true, Seat=true, VehicleSeat=true,
@@ -99,6 +113,8 @@ local function validateDefinition(definition: any)
 		assert(typeof(node.Transform) == "CFrame", id .. " node requires Transform")
 		assert(type(node.Accepts) == "table" and #node.Accepts > 0, id .. " node requires Accepts")
 		for _, accepts in ipairs(node.Accepts) do assert(type(accepts)=="string" and accepts~="", id.." node has invalid compatibility") end
+		if node.Priority~=nil then assert(finite(node.Priority),id.." node Priority must be finite") end
+		if node.Surface~=nil then assert(type(node.Surface)=="string" and node.Surface~="",id.." node Surface must be string") end
 		nodeNames[node.Name] = true
 	end
 
@@ -163,7 +179,8 @@ for _, moduleName in ipairs(MODULES) do
 	end
 end
 
-assert(#ordered == 100, string.format("PartCatalog must contain exactly 100 parts; got %d", #ordered))
+assert(#ordered >= 100, string.format("PartCatalog must contain at least 100 parts; got %d", #ordered))
+for requiredId in pairs(REQUIRED_IDS) do assert(definitions[requiredId]~=nil,"PartCatalog missing required Id: "..requiredId) end
 for _,category in ipairs(CATEGORY_ORDER) do assert((categoryCounts[category] or 0)>0,"PartCatalog category is empty: "..category) end
 
 table.sort(ordered, function(a, b)
@@ -185,7 +202,8 @@ function Catalog.GetCategories(): {string} return clone(CATEGORY_ORDER) end
 function Catalog.GetCategoryCounts(): {[string]: number} return clone(categoryCounts) end
 function Catalog.Count(): number return #ordered end
 function Catalog.Validate(): (boolean, string)
-	if #ordered ~= 100 then return false, "CatalogCountMismatch" end
+	if #ordered < 100 then return false, "CatalogBelowMinimum" end
+	for requiredId in pairs(REQUIRED_IDS) do if definitions[requiredId]==nil then return false,"MissingRequiredPart:"..requiredId end end
 	for id, definition in pairs(definitions) do
 		local ok, reason = pcall(validateDefinition, definition)
 		if not ok then return false, tostring(reason) end
