@@ -42,8 +42,9 @@ function H.boxNodes(size: Vector3, nodeType: string?, accepts: {string}?): {any}
 	return {
 		H.node("Top",kind,CFrame.new(0,size.Y/2,0)*CFrame.Angles(math.pi/2,0,0),accepts),
 		H.node("Bottom",kind,CFrame.new(0,-size.Y/2,0)*CFrame.Angles(-math.pi/2,0,0),accepts),
-		H.node("Left",kind,CFrame.new(-size.X/2,0,0)*CFrame.Angles(0,-math.pi/2,0),accepts),
-		H.node("Right",kind,CFrame.new(size.X/2,0,0)*CFrame.Angles(0,math.pi/2,0),accepts),
+		-- Side nodes face OUTWARD so wheel/armour/mobility parts mount outside the chassis.
+		H.node("Left",kind,CFrame.new(-size.X/2,0,0)*CFrame.Angles(0,math.pi/2,0),accepts),
+		H.node("Right",kind,CFrame.new(size.X/2,0,0)*CFrame.Angles(0,-math.pi/2,0),accepts),
 		H.node("Front",kind,CFrame.new(0,0,-size.Z/2),accepts),
 		H.node("Back",kind,CFrame.new(0,0,size.Z/2)*CFrame.Angles(0,math.pi,0),accepts),
 	}
@@ -112,7 +113,9 @@ function H.part(id: string, displayName: string, shortName: string, a4: any, a5:
 		category=a4; description=a5; size=a6; mass=a7; health=a8; geometry=a9; extra=a10 or {}
 	else
 		description=a4; size=a5; mass=a6; health=a7; geometry=a8; extra=a9 or {}
-		category=if type(extra)=="table" then extra.Category else nil
+		-- Structural definitions are the legacy compact form that omitted Category.
+		-- Other category modules still override this explicitly through extra.Category.
+		category=if type(extra)=="table" then (extra.Category or "Structural") else "Structural"
 	end
 
 	assert(type(id)=="string" and id~="","Part requires non-empty id")
