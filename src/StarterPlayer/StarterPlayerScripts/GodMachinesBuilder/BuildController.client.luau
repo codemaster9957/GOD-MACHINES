@@ -1,4 +1,5 @@
 --!nonstrict
+-- GOD MACHINES Workshop V2 client orchestration. Server remains authoritative for every mutation.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -6,45 +7,46 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-if not player then
-	error("[GOD MACHINES] LocalPlayer unavailable")
-end
-
+if not player then error("[GOD MACHINES] LocalPlayer unavailable") end
 local playerGui = player:WaitForChild("PlayerGui")
 local mouse = player:GetMouse()
 
 local BuildUI = require(script.Parent:WaitForChild("BuildUI"))
 local BuildPreview = require(script.Parent:WaitForChild("BuildPreview"))
 local BuildInput = require(script.Parent:WaitForChild("BuildInput"))
+local NodeVisualizer = require(script.Parent:WaitForChild("NodeVisualizer"))
 
 local framework = ReplicatedStorage:WaitForChild("MechFramework")
 local Shared = framework:WaitForChild("Shared")
 local Remotes = framework:WaitForChild("Remotes")
 local Functions = Remotes:WaitForChild("Functions")
 local BuildMath = require(Shared:WaitForChild("BuildMath"))
-local remote = Functions:WaitForChild("RequestBuildAction")
+local PartCatalog = require(Shared:WaitForChild("PartCatalog"))
+local buildRemote = Functions:WaitForChild("RequestBuildAction")
+local machineRemote = Functions:WaitForChild("RequestMachineAction")
 
-if not remote:IsA("RemoteFunction") then
-	error("[GOD MACHINES] RequestBuildAction must be a RemoteFunction")
-end
+assert(buildRemote:IsA("RemoteFunction"), "RequestBuildAction must be RemoteFunction")
+assert(machineRemote:IsA("RemoteFunction"), "RequestMachineAction must be RemoteFunction")
 
-local PARTS = {
-	{ Id = "StructuralFrame", DisplayName = "STRUCTURAL FRAME", ShortName = "FRAME", Slot = 1 },
-	{ Id = "SmallReactor", DisplayName = "SMALL REACTOR", ShortName = "REACTOR", Slot = 2 },
-	{ Id = "Autocannon", DisplayName = "AUTOCANNON", ShortName = "CANNON", Slot = 3 },
-}
+local catalog = PartCatalog.GetList()
+local definitions = PartCatalog.GetAll()
+local categories = PartCatalog.GetCategories()
+assert(#catalog == 100, "[GOD MACHINES] Expected 100 public catalog parts")
 
 local buildMode = false
-local selectedPart = PARTS[1].Id
+local machineMode = "Edit"
+local selectedPart = definitions.StructuralFrame and "StructuralFrame" or catalog[1].Id
 local activeAttribute = player:GetAttribute("ActiveMechId")
-local mechId = if type(activeAttribute) == "string" then activeAttribute else nil
-local definitions = {}
-local loadingDefinitions = {}
+local mechId = if type(activeAttribute) == "string" and activeAttribute ~= "" then activeAttribute else nil
 local statusLockUntil = 0
+local lastSummaryAt = 0
+local summaryBusy = false
 local input = nil
+local currentBindings = {}
 
-local ui = BuildUI.new(playerGui)
+local ui = BuildUI.new(playerGui, {})
 local preview = BuildPreview.new(mouse, BuildMath)
+local nodes = NodeVisualizer.new()
 
 local function status(text, tone, duration)
 	ui:SetStatus(text, tone)
@@ -54,332 +56,309 @@ end
 local function startupReason(fallback)
 	local state = framework:GetAttribute("ServerBootstrapState")
 	local reason = framework:GetAttribute("ServerBootstrapError")
-	if type(reason) == "string" and reason ~= "" then
-		return "SERVER " .. tostring(state or "ERROR") .. ": " .. reason
-	end
-	if type(state) == "string" and state ~= "" and state ~= "Ready" then
-		return "SERVER " .. state
-	end
+	if type(reason) == "string" and reason ~= "" then return "SERVER " .. tostring(state or "ERROR") .. ": " .. reason end
+	if type(state) == "string" and state ~= "" and state ~= "Ready" and state ~= "Degraded" then return "SERVER " .. state end
 	return fallback
 end
 
-local function waitForBuilderReady(timeoutSeconds)
-	if framework:GetAttribute("BuilderServerReady") == true then
-		return true, nil
-	end
-
+local function waitForReady(attributeName, timeoutSeconds)
+	if framework:GetAttribute(attributeName) == true then return true, nil end
 	local deadline = os.clock() + (timeoutSeconds or 8)
 	while os.clock() < deadline do
-		if framework:GetAttribute("BuilderServerReady") == true then
-			return true, nil
-		end
-
-		local state = framework:GetAttribute("ServerBootstrapState")
-		if state == "Degraded" then
-			local reason = framework:GetAttribute("ServerBootstrapError")
-			if type(reason) == "string" and reason ~= "" then
-				-- A degraded optional system does not necessarily mean the builder failed.
-				-- Keep waiting for the explicit builder-ready flag until the deadline.
-			end
-		end
-
+		if framework:GetAttribute(attributeName) == true then return true, nil end
 		task.wait(0.05)
 	end
-
 	return false, startupReason("SERVER NOT READY")
 end
 
-local function invoke(request, timeoutSeconds)
-	local ready, readyReason = waitForBuilderReady(timeoutSeconds or 8)
-	if not ready then
-		return false, readyReason
-	end
-
-	local finished = false
-	local callOk = false
-	local success = false
-	local result = nil
-
+local function invokeRemote(remote, readyAttribute, request, timeoutSeconds)
+	local ready, readyReason = waitForReady(readyAttribute, timeoutSeconds or 8)
+	if not ready then return false, readyReason end
+	local finished, callOk, first, second = false, false, nil, nil
 	task.spawn(function()
-		local ok, first, second = pcall(function()
-			return remote:InvokeServer(request)
-		end)
-		callOk = ok
-		success = first
-		result = second
+		callOk, first, second = pcall(function() return remote:InvokeServer(request) end)
 		finished = true
 	end)
-
-	local deadline = os.clock() + (timeoutSeconds or 5)
-	while not finished and os.clock() < deadline do
-		task.wait()
-	end
-
-	if not finished then
-		return false, startupReason("REQUEST TIMEOUT")
-	end
-
-	if not callOk then
-		return false, "SERVER ERROR: " .. tostring(success)
-	end
-
-	return success == true, result
+	local deadline = os.clock() + (timeoutSeconds or 7)
+	while not finished and os.clock() < deadline do task.wait() end
+	if not finished then return false, startupReason("REQUEST TIMEOUT") end
+	if not callOk then return false, "SERVER ERROR: " .. tostring(first) end
+	return first == true, second
 end
 
-local function loadDefinition(partType)
-	local cached = definitions[partType]
-	if cached then
-		return cached
-	end
-
-	if loadingDefinitions[partType] then
-		local deadline = os.clock() + 6
-		while loadingDefinitions[partType] and os.clock() < deadline do
-			task.wait()
-		end
-		return definitions[partType], definitions[partType] and nil or "DEFINITION UNAVAILABLE"
-	end
-
-	loadingDefinitions[partType] = true
-	local success, result = invoke({
-		Action = "Definition",
-		PartType = partType,
-	}, 8)
-	loadingDefinitions[partType] = nil
-
-	if not success then
-		warn("[GOD MACHINES] Definition request failed:", partType, result)
-		return nil, result
-	end
-
-	if type(result) ~= "table" or typeof(result.Size) ~= "Vector3" then
-		warn("[GOD MACHINES] Invalid definition returned for", partType)
-		return nil, "INVALID DEFINITION"
-	end
-
-	definitions[partType] = result
-	return result, nil
+local function buildInvoke(request, timeoutSeconds)
+	return invokeRemote(buildRemote, "BuilderServerReady", request, timeoutSeconds)
 end
 
-local function selectPart(partType)
-	local definition, reason = loadDefinition(partType)
-	if not definition then
-		status(reason or "PART UNAVAILABLE", "bad", 1.5)
-		return false
-	end
-
-	if not preview:SetDefinition(definition) then
-		status("INVALID PART DEFINITION", "bad", 1.2)
-		return false
-	end
-
-	selectedPart = partType
-	ui:SetSelectedPart(partType)
-	ui:SetInspector(partType, definition)
-	status("SELECTED " .. partType, "good", 0.45)
-	return true
+local function machineInvoke(request, timeoutSeconds)
+	return invokeRemote(machineRemote, "MachineServerReady", request, timeoutSeconds)
 end
 
 local function setActiveMech(value)
 	mechId = if type(value) == "string" and value ~= "" then value else nil
 	player:SetAttribute("ActiveMechId", mechId)
+	nodes:SetMech(mechId)
+	if not mechId then ui:SetEngineeringSummary(nil) end
 end
 
-local function setBuildMode(enabled)
+local function componentFromTarget()
+	local target = mouse.Target
+	if not target then return nil, nil, nil end
+	local componentId = target:GetAttribute("ComponentId")
+	local targetMechId = target:GetAttribute("MechId")
+	local partType = target:GetAttribute("PartType")
+	if type(componentId) ~= "string" or type(targetMechId) ~= "string" then return nil, nil, nil end
+	return targetMechId, componentId, if type(partType) == "string" then partType else nil
+end
+
+local function selectPart(partType)
+	local definition = definitions[partType]
+	if not definition then status("PART UNAVAILABLE: " .. tostring(partType), "bad", 1.4); return false end
+	if not preview:SetDefinition(definition) then status("INVALID PART DEFINITION", "bad", 1.2); return false end
+	selectedPart = partType
+	ui:SetSelectedPart(partType)
+	ui:SetInspector(partType, definition)
+	status("SELECTED " .. tostring(definition.DisplayName or partType), "good", 0.35)
+	return true
+end
+
+local function setBuildVisible(enabled)
 	buildMode = enabled == true
 	player:SetAttribute("BuildMode", buildMode)
 	ui:SetBuildMode(buildMode)
 	preview:SetEnabled(buildMode)
-	if input then
-		input:SetActive(buildMode)
-	end
-
+	nodes:SetEnabled(buildMode and ui.NodeVisible)
+	if input then input:SetActive(buildMode) end
 	if buildMode then
-		local ok = selectPart(selectedPart)
-		if ok then
-			status("BUILD MODE ONLINE", "good", 0.7)
-		end
+		nodes:SetMech(mechId)
+		selectPart(selectedPart)
 	else
 		statusLockUntil = 0
 	end
 end
 
+local function enterEditMode()
+	if not mechId then
+		machineMode = "Edit"
+		ui:SetMode("Edit")
+		setBuildVisible(true)
+		return
+	end
+	local success, result = machineInvoke({ Action="SetMode", MechId=mechId, Mode="Edit" }, 8)
+	if not success then status(result or "COULD NOT ENTER EDIT MODE", "bad", 1.5); return end
+	machineMode = "Edit"
+	ui:SetMode("Edit")
+	setBuildVisible(true)
+	status("MACHINE STABILIZED FOR EDITING", "good", 0.7)
+end
+
+local function testMachine()
+	if not mechId then status("BUILD A MACHINE FIRST", "bad", 1.0); return end
+	if machineMode == "Test" then enterEditMode(); return end
+	local success, result = machineInvoke({ Action="SetMode", MechId=mechId, Mode="Test" }, 8)
+	if not success then status(result or "TEST MODE UNAVAILABLE", "bad", 1.5); return end
+	machineMode = "Test"
+	ui:SetMode("Test")
+	setBuildVisible(false)
+	status("TEST MODE — SIT IN A PILOT SEAT", "blue", 1.2)
+end
+
 local function toggleBuildMode()
-	setBuildMode(not buildMode)
+	if machineMode == "Test" then enterEditMode(); return end
+	setBuildVisible(not buildMode)
 end
 
 local function placePart()
-	if not buildMode then
-		return
-	end
-
+	if not buildMode then return end
 	preview:Update(mechId)
 	local data, previewReason = preview:GetPlacement(mechId)
 	if not data then
 		preview:Reject()
 		local readable = {
-			ATTACHMENT_REQUIRED = "ATTACH TO YOUR MECH",
-			OTHER_MECH = "THAT IS NOT YOUR ACTIVE MECH",
-			NO_COMPATIBLE_NODE = "NO COMPATIBLE ATTACHMENT",
-			START_ON_GROUND = "START A NEW MECH ON OPEN GROUND",
+			ATTACHMENT_REQUIRED="ATTACH TO A GREEN NODE",
+			OTHER_MECH="THAT IS NOT YOUR ACTIVE MACHINE",
+			NO_COMPATIBLE_NODE="NO COMPATIBLE ATTACHMENT",
+			START_ON_GROUND="START A NEW MACHINE ON OPEN GROUND",
 		}
-		status(readable[previewReason] or previewReason or "INVALID PLACEMENT", "bad", 0.9)
+		status(readable[previewReason] or previewReason or "INVALID PLACEMENT", "bad", .8)
 		return
 	end
-
-	local success, result = invoke({
-		Action = "Place",
-		MechId = mechId,
-		PartType = selectedPart,
-		Transform = data.Transform,
-		TargetComponentId = data.TargetComponentId,
-		TargetNode = data.TargetNode,
-		SourceNode = data.SourceNode,
-		Rotation = data.Rotation,
+	local success, result = buildInvoke({
+		Action="Place", MechId=mechId, PartType=selectedPart, Transform=data.Transform,
+		TargetComponentId=data.TargetComponentId, TargetNode=data.TargetNode, SourceNode=data.SourceNode, Rotation=data.Rotation,
 	}, 8)
-
 	if success then
-		if type(result) == "table" and type(result.MechId) == "string" then
-			setActiveMech(result.MechId)
-		end
-		status("COMPONENT INSTALLED", "good", 0.65)
+		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
+		status("COMPONENT INSTALLED", "good", .55)
 		return
 	end
-
 	preview:Reject()
-	status(tostring(result or "PLACEMENT REJECTED"), "bad", 1.5)
+	status(tostring(result or "PLACEMENT REJECTED"), "bad", 1.2)
 end
 
 local function removePart()
-	if not buildMode then
-		return
-	end
+	if not buildMode or not mechId then return end
+	local targetMech, componentId = componentFromTarget()
+	if targetMech ~= mechId or not componentId then status("AIM AT ONE OF YOUR COMPONENTS", "bad", .8); return end
+	local success, result = buildInvoke({ Action="Remove", MechId=mechId, ComponentId=componentId }, 8)
+	if success then status("COMPONENT REMOVED", "good", .55) else status(result or "REMOVE REJECTED", "bad", 1) end
+end
 
-	local target = mouse.Target
-	if not target then
-		status("NO COMPONENT SELECTED", "bad", 0.7)
-		return
-	end
+local function duplicateTarget()
+	if not buildMode then return end
+	local targetMech, _, partType = componentFromTarget()
+	if targetMech ~= mechId or not partType or not definitions[partType] then status("AIM AT A COMPONENT TO DUPLICATE", "bad", .8); return end
+	selectPart(partType)
+	status("DUPLICATE ARMED — PLACE THE COPY", "good", .9)
+end
 
-	local targetMech = target:GetAttribute("MechId")
-	local component = target:GetAttribute("ComponentId")
-	if type(targetMech) ~= "string" or type(component) ~= "string" then
-		status("NO COMPONENT SELECTED", "bad", 0.7)
-		return
-	end
-
-	if type(mechId) ~= "string" or targetMech ~= mechId then
-		status("THAT IS NOT YOUR ACTIVE MECH", "bad", 0.8)
-		return
-	end
-
-	local success, result = invoke({
-		Action = "Remove",
-		MechId = targetMech,
-		ComponentId = component,
-	}, 8)
-
-	if success then
-		status("COMPONENT REMOVED", "good", 0.6)
-	else
-		status(tostring(result or "REMOVE REJECTED"), "bad", 1.2)
-	end
+local function paintTarget(region, color, material)
+	if not buildMode or not mechId then return end
+	local targetMech, componentId = componentFromTarget()
+	if targetMech ~= mechId or not componentId then status("AIM AT A COMPONENT TO PAINT", "bad", .8); return end
+	local success, result = buildInvoke({ Action="Paint", MechId=mechId, ComponentId=componentId, Region=region, Color=color, Material=material }, 8)
+	if success then status("PAINT APPLIED", "good", .55) else status(result or "PAINT REJECTED", "bad", 1) end
 end
 
 local function applyHistory(action)
-	local success, result = invoke({ Action = action }, 8)
+	local success, result = buildInvoke({ Action=action }, 8)
 	if success then
-		if type(result) == "table" and type(result.MechId) == "string" then
-			setActiveMech(result.MechId)
-		end
-		status(action, "good", 0.5)
-	else
-		status(tostring(result or "NOTHING TO APPLY"), "bad", 0.8)
-	end
+		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
+		status(action, "good", .45)
+	else status(result or "NOTHING TO APPLY", "bad", .65) end
 end
 
 local function rotate()
-	if not buildMode then
-		return
-	end
-	preview:Rotate()
-	preview:Update(mechId)
-	status("ROTATED 90°", nil, 0.25)
+	if not buildMode then return end
+	preview:Rotate(); preview:Update(mechId); status("ROTATED 90°", nil, .2)
+end
+
+local function mirror()
+	if not buildMode then return end
+	preview:Mirror(); preview:Update(mechId); status("MIRRORED ORIENTATION", nil, .25)
 end
 
 local function selectSlot(slot)
-	local part = PARTS[slot]
-	if part then
-		selectPart(part.Id)
-	end
+	local partId = ui:GetHotbarPart(slot)
+	if partId then selectPart(partId) end
 end
 
-ui:SetParts(PARTS, selectPart)
+local function saveBlueprint(name)
+	if not mechId then status("NO ACTIVE MACHINE", "bad", .8); return end
+	name = tostring(name or ""):match("^%s*(.-)%s*$")
+	if name == "" then status("ENTER A BLUEPRINT NAME", "bad", .8); return end
+	local success, result = machineInvoke({ Action="SaveBlueprint", MechId=mechId, Name=name }, 8)
+	if success then status("BLUEPRINT SAVED: " .. name, "good", 1) else status(result or "BLUEPRINT SAVE FAILED", "bad", 1.2) end
+end
+
+local function loadBlueprint(name)
+	name = tostring(name or ""):match("^%s*(.-)%s*$")
+	if name == "" then status("ENTER A BLUEPRINT NAME", "bad", .8); return end
+	local success, result = machineInvoke({ Action="LoadBlueprint", Name=name }, 8)
+	if not success then status(result or "BLUEPRINT LOAD FAILED", "bad", 1.2); return end
+	if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
+	machineMode = "Edit"; ui:SetMode("Edit"); setBuildVisible(true)
+	status("BLUEPRINT DEPLOYED: " .. name, "good", 1)
+end
+
+local function refreshBindings()
+	if not mechId then currentBindings = {}; return false end
+	local success, result = machineInvoke({ Action="GetBindings", MechId=mechId }, 6)
+	if success and type(result)=="table" then currentBindings=result; return true end
+	return false
+end
+
+local function autoBindings()
+	if not mechId then status("NO ACTIVE MACHINE", "bad", .8); return end
+	local success, result = machineInvoke({ Action="AutoBindings", MechId=mechId }, 8)
+	if success and type(result)=="table" then currentBindings=result; status("AUTOMATIC CONTROLS GENERATED", "good", .9)
+	else status(result or "AUTO BIND FAILED", "bad", 1) end
+end
+
+local function bindTarget(action)
+	if not mechId then status("NO ACTIVE MACHINE", "bad", .8); return end
+	local targetMech, componentId = componentFromTarget()
+	if targetMech ~= mechId or not componentId then status("AIM AT A COMPONENT TO BIND", "bad", .8); return end
+	refreshBindings()
+	currentBindings[action] = currentBindings[action] or {}
+	local existing = table.find(currentBindings[action], componentId)
+	if existing then table.remove(currentBindings[action], existing) else table.insert(currentBindings[action], componentId) end
+	local success, result = machineInvoke({ Action="SetBindings", MechId=mechId, Groups=currentBindings }, 8)
+	if success then status((existing and "UNBOUND " or "BOUND ") .. action, "good", .8)
+	else status(result or "BINDING UPDATE FAILED", "bad", 1) end
+end
+
+local function refreshSummary()
+	if summaryBusy or not buildMode or not mechId then return end
+	if os.clock() - lastSummaryAt < .5 then return end
+	lastSummaryAt = os.clock(); summaryBusy = true
+	task.spawn(function()
+		local success, result = buildInvoke({ Action="Summary", MechId=mechId }, 4)
+		if success then ui:SetEngineeringSummary(result) end
+		summaryBusy = false
+	end)
+end
+
+ui.Callbacks.SelectPart = selectPart
+ui.Callbacks.TestMachine = testMachine
+ui.Callbacks.PaintTarget = paintTarget
+ui.Callbacks.Mirror = mirror
+ui.Callbacks.DuplicateTarget = duplicateTarget
+ui.Callbacks.ToggleNodes = function(enabled) nodes:SetEnabled(enabled and buildMode) end
+ui.Callbacks.RemoveTarget = removePart
+ui.Callbacks.Undo = function() applyHistory("Undo") end
+ui.Callbacks.Redo = function() applyHistory("Redo") end
+ui.Callbacks.SaveBlueprint = saveBlueprint
+ui.Callbacks.LoadBlueprint = loadBlueprint
+ui.Callbacks.BindTarget = bindTarget
+ui.Callbacks.AutoBindings = autoBindings
+ui:SetCatalog(catalog, categories)
+ui:SetMode("Edit")
 
 input = BuildInput.new(UserInputService, {
-	Toggle = toggleBuildMode,
-	Rotate = rotate,
-	Place = placePart,
-	Remove = removePart,
-	Undo = function()
-		applyHistory("Undo")
-	end,
-	Redo = function()
-		applyHistory("Redo")
-	end,
-	SelectSlot = selectSlot,
+	Toggle=toggleBuildMode, Rotate=rotate, Mirror=mirror, Place=placePart, Remove=removePart,
+	Duplicate=duplicateTarget, Undo=function() applyHistory("Undo") end, Redo=function() applyHistory("Redo") end,
+	SelectSlot=selectSlot, TestMachine=testMachine,
 })
 
 player:SetAttribute("BuildMode", false)
 ui:SetBuildMode(false)
 preview:SetEnabled(false)
+nodes:SetEnabled(false)
+nodes:SetMech(mechId)
+
+player:GetAttributeChangedSignal("ActiveMechId"):Connect(function()
+	local value = player:GetAttribute("ActiveMechId")
+	if type(value)=="string" and value~="" and value~=mechId then setActiveMech(value) end
+end)
 
 task.spawn(function()
-	local ready, reason = waitForBuilderReady(10)
-	if ready then
-		selectPart(selectedPart)
-	else
-		warn("[GOD MACHINES] Builder server unavailable:", reason)
-		status(reason or "SERVER NOT READY", "bad", 2)
-	end
+	local ready, reason = waitForReady("BuilderServerReady", 10)
+	if ready then selectPart(selectedPart) else warn("[GOD MACHINES] Builder unavailable:", reason); status(reason or "SERVER NOT READY", "bad", 2) end
 end)
 
 local renderConnection = RunService.RenderStepped:Connect(function()
-	if not buildMode then
-		return
-	end
-
-	local state = preview:Update(mechId)
-	if os.clock() < statusLockUntil then
-		return
-	end
-
-	if state == "SNAP" then
-		ui:SetStatus("ATTACHMENT READY", "good")
-	elseif state == "FREE" then
-		ui:SetStatus("FREE PLACEMENT", nil)
-	elseif state == "ATTACHMENT_REQUIRED" then
-		ui:SetStatus("ATTACH TO YOUR MECH", "bad")
-	elseif state == "OTHER_MECH" then
-		ui:SetStatus("OTHER MECH", "bad")
-	elseif state == "NO_COMPATIBLE_NODE" then
-		ui:SetStatus("NO COMPATIBLE NODE", "bad")
-	elseif state == "START_ON_GROUND" then
-		ui:SetStatus("START ON OPEN GROUND", "bad")
-	elseif state == "REJECTED" then
-		ui:SetStatus("PLACEMENT REJECTED", "bad")
+	if buildMode then
+		local state = preview:Update(mechId)
+		nodes:Update()
+		refreshSummary()
+		if os.clock() >= statusLockUntil then
+			if state=="SNAP" then ui:SetStatus("ATTACHMENT READY", "good")
+			elseif state=="FREE" then ui:SetStatus("FREE PLACEMENT", nil)
+			elseif state=="ATTACHMENT_REQUIRED" then ui:SetStatus("ATTACH TO A GREEN NODE", "bad")
+			elseif state=="OTHER_MECH" then ui:SetStatus("OTHER MACHINE", "bad")
+			elseif state=="NO_COMPATIBLE_NODE" then ui:SetStatus("NO COMPATIBLE NODE", "bad")
+			elseif state=="START_ON_GROUND" then ui:SetStatus("START ON OPEN GROUND", "bad")
+			elseif state=="REJECTED" then ui:SetStatus("PLACEMENT REJECTED", "bad") end
+		end
 	end
 end)
 
 script.Destroying:Connect(function()
 	player:SetAttribute("BuildMode", false)
-	if input then
-		input:Destroy()
-	end
-	preview:Destroy()
-	if renderConnection then
-		renderConnection:Disconnect()
-	end
+	if input then input:Destroy() end
+	preview:Destroy(); nodes:Destroy(); ui:Destroy()
+	if renderConnection then renderConnection:Disconnect() end
 end)
 
-print("[GOD MACHINES] Builder initialized")
+print("[GOD MACHINES] Workshop V2 initialized with", #catalog, "parts")
