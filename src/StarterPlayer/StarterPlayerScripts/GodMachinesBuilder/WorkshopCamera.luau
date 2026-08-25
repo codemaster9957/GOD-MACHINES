@@ -108,8 +108,9 @@ function WorkshopCamera.new(UserInputService, RunService)
 	table.insert(self._connections, UserInputService.InputChanged:Connect(function(input)
 		if not self.Active then return end
 		if input.UserInputType == Enum.UserInputType.MouseMovement then
-			if self._orbitHeld then self._dragDelta += input.Delta end
-			if self._panHeld then self._panDelta += input.Delta end
+			local delta = Vector2.new(input.Delta.X, input.Delta.Y)
+			if self._orbitHeld then self._dragDelta += delta end
+			if self._panHeld then self._panDelta += delta end
 		elseif input.UserInputType == Enum.UserInputType.MouseWheel then
 			self._zoomDelta += input.Position.Z
 		end
