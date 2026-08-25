@@ -70,8 +70,20 @@ function Combat:CanFire(userId: number, mechId: string, weaponId: string): (bool
 	if metadata.Overheated == true or metadata.Jammed == true then return false, "WeaponDisabled" end
 	local fireRate = math.max(tonumber(config.FireRate) or 1, .01)
 	if os.clock() - (self._lastFire[weaponId] or -math.huge) < 1 / fireRate then return false, "Cooldown" end
+
+	-- Power.Demand is continuous standby machinery. RequiredPower is peak firing output.
+	-- Only the difference is requested as burst bus headroom; otherwise energy weapons pay twice.
 	local requiredPower = math.max(0, tonumber(config.RequiredPower) or 0)
-	if requiredPower > 0 and not self._power:CanConsumePower(mechId, weaponId, requiredPower) then return false, "NoPower" end
+	if requiredPower > 0 then
+		local standbyDemand = math.max(0, tonumber(weapon.Power and weapon.Power.Demand) or 0)
+		if standbyDemand > 0 then
+			local standbyState = self._power:GetPowerState(mechId, weaponId)
+			if not standbyState or (tonumber(standbyState.Fraction) or 0) < .999 then return false, "NoPower" end
+		end
+		local extraRequired = math.max(0, requiredPower - standbyDemand)
+		if extraRequired > 0 and not self._power:CanConsumePower(mechId, weaponId, extraRequired) then return false, "NoPower" end
+	end
+
 	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
 	if ammoUsage > 0 and self:_ammoState(mechId) < ammoUsage then return false, "NoAmmoStorage" end
 	return true, nil
