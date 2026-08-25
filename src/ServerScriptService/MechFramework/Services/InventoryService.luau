@@ -1,9 +1,23 @@
 --!strict
 -- Server-authoritative collection ledger with stackable parts, unique components, and materials.
+-- Studio debug inventory is seeded here because InventoryService is part of the builder's core startup path.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
+
 local Definitions = require(game.ReplicatedStorage.MechFramework.Shared.CollectionDefinitions)
+local Config = require(game.ReplicatedStorage.MechFramework.Shared.FrameworkConfig)
 
 local Inventory: any = { _players = {} }
+
+local STUDIO_BUILD_PARTS = {
+	"StructuralFrame",
+	"SmallReactor",
+	"Autocannon",
+}
+
+local STUDIO_BUILD_AMOUNT = 25
 
 local function clone(value: any): any
 	if type(value) ~= "table" then return value end
@@ -61,6 +75,34 @@ end
 -- Legacy build compatibility. Grants real collection parts, never client-authored definitions.
 function Inventory:Grant(userId: number, partType: string, amount: number)
 	return self:GrantPart(userId, partType, amount, { Source = "LegacyGrant" })
+end
+
+function Inventory:EnsureStudioBuildInventory(userId: number)
+	if not (RunService:IsStudio() and Config.Debug) then
+		return
+	end
+
+	for _, partType in ipairs(STUDIO_BUILD_PARTS) do
+		if self:GetCount(userId, partType) == 0 then
+			self:GrantPart(userId, partType, STUDIO_BUILD_AMOUNT, { Source = "StudioDebug" })
+		end
+	end
+
+	print("[MechFramework] Studio build inventory ready", userId)
+end
+
+function Inventory:Start()
+	if not (RunService:IsStudio() and Config.Debug) then
+		return
+	end
+
+	Players.PlayerAdded:Connect(function(player)
+		self:EnsureStudioBuildInventory(player.UserId)
+	end)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		self:EnsureStudioBuildInventory(player.UserId)
+	end
 end
 
 function Inventory:Consume(userId: number, partType: string, amount: number): boolean
