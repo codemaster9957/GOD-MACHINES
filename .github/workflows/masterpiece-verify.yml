@@ -1,0 +1,62 @@
+name: Masterpiece Verification
+
+on:
+  push:
+    branches:
+      - feat/masterpiece-builder-v2
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  repository-invariants:
+    name: Repository invariants
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify GOD MACHINES architecture
+        run: python scripts/verify_masterpiece.py
+
+  luau-syntax:
+    name: Compile every Luau source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build official Luau compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/luau-lang/luau.git /tmp/luau
+          cmake -S /tmp/luau -B /tmp/luau-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLUAU_BUILD_CLI=ON \
+            -DLUAU_BUILD_TESTS=OFF \
+            -DLUAU_BUILD_WEB=OFF
+          cmake --build /tmp/luau-build --target Luau.Compile.CLI -j 2
+          test -x /tmp/luau-build/luau-compile
+
+      - name: Syntax-check repository Luau
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=/tmp/luau-build/luau-compile
+          checked=0
+          while IFS= read -r -d '' file; do
+            echo "Checking $file"
+            "$compiler" "$file" >/dev/null
+            checked=$((checked + 1))
+          done < <(find src -type f -name '*.luau' -print0 | sort -z)
+          echo "Luau syntax passed for $checked files"
+          test "$checked" -gt 0
