@@ -29,6 +29,23 @@ type AimData = {
 	Direction: Vector3?,
 }
 
+local function runtimeKey(mechId: string, weaponId: string): string
+	return mechId .. ":" .. weaponId
+end
+
+local function finiteVector3(value: any): boolean
+	if typeof(value) ~= "Vector3" then
+		return false
+	end
+	local function finite(numberValue: number): boolean
+		return numberValue == numberValue
+			and numberValue ~= math.huge
+			and numberValue ~= -math.huge
+			and math.abs(numberValue) <= 1000000
+	end
+	return finite(value.X) and finite(value.Y) and finite(value.Z)
+end
+
 --------------------------------------------------
 -- SERVICE
 --------------------------------------------------
@@ -196,8 +213,9 @@ function Combat:CanFire(
 	local lastFireMap: NumberMap =
 		self._lastFire
 
+	local stateKey = runtimeKey(mechId, weaponId)
 	local lastFire =
-		lastFireMap[weaponId]
+		lastFireMap[stateKey]
 		or -math.huge
 
 	if
@@ -244,12 +262,13 @@ function Combat:CanFire(
 		self._ammo
 
 	local ammo =
-		ammoMap[weaponId]
+		ammoMap[stateKey]
 
 	if ammo == nil then
 		ammo =
 			tonumber(metadata.Ammo)
-			or math.huge
+			or tonumber(config.AmmoCapacity)
+			or (if ammoUsage > 0 then 0 else math.huge)
 	end
 
 	if
@@ -350,7 +369,7 @@ function Combat:Fire(
 			aim.Direction
 
 		if
-			typeof(requestedDirection) == "Vector3"
+			finiteVector3(requestedDirection)
 			and requestedDirection.Magnitude > 0.9
 		then
 			local requested: Vector3 =
@@ -420,7 +439,8 @@ function Combat:Fire(
 	local lastFireMap =
 		self._lastFire :: {[string]: number}
 
-	lastFireMap[weaponId] =
+	local stateKey = runtimeKey(mechId, weaponId)
+	lastFireMap[stateKey] =
 		os.clock()
 
 	--------------------------------------------------
@@ -438,16 +458,18 @@ function Combat:Fire(
 			self._ammo :: {[string]: number}
 
 		local currentAmmo: number? =
-			ammoMap[weaponId]
+			ammoMap[stateKey]
 
 		if currentAmmo == nil then
 			currentAmmo =
-				tonumber(metadata.Ammo) or 0
+				tonumber(metadata.Ammo)
+				or tonumber(config.AmmoCapacity)
+				or 0
 		end
 
 		local resolvedAmmo: number = currentAmmo or 0
 
-		ammoMap[weaponId] =
+		ammoMap[stateKey] =
 			math.max(
 				0,
 				resolvedAmmo - ammoUsage
@@ -561,10 +583,11 @@ function Combat:Reload(
 	local ammoMap: NumberMap =
 		self._ammo
 
+	local stateKey = runtimeKey(mechId, weaponId)
 	local currentAmmo =
-		ammoMap[weaponId] or 0
+		ammoMap[stateKey] or 0
 
-	ammoMap[weaponId] =
+	ammoMap[stateKey] =
 		currentAmmo + amount
 
 	return true
@@ -605,10 +628,10 @@ function Combat:DebugWeapon(
 			),
 
 		Ammo =
-			ammoMap[weaponId],
+			ammoMap[runtimeKey(mechId, weaponId)],
 
 		LastFire =
-			lastFireMap[weaponId],
+			lastFireMap[runtimeKey(mechId, weaponId)],
 
 		Power =
 			self._power:GetPowerState(
