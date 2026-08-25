@@ -16,7 +16,7 @@ local Control: any = {
 
 local VALID_ACTIONS = table.freeze({
 	ThrottleForward=true, ThrottleReverse=true,
-	SteerLeft=true, SteerRight=true, Brake=true,
+	SteerLeft=true, SteerRight=true, StrafeLeft=true, StrafeRight=true, Brake=true,
 	VerticalUp=true, VerticalDown=true,
 	PitchUp=true, PitchDown=true, YawLeft=true, YawRight=true, RollLeft=true, RollRight=true,
 	Primary=true, Secondary=true, Utility=true, Reload=true, Mechanism1=true, Mechanism2=true,
@@ -75,10 +75,12 @@ function Control:GenerateDefaultBindings(userId: number, mechId: string, force: 
 			if mobility.Drive == true or mobility.Kind == "TrackDrive" or mobility.Kind == "Drivetrain" or mobility.Kind == "OmniWheel" then
 				add(groups,"ThrottleForward",componentId); add(groups,"ThrottleReverse",componentId)
 			end
-			if mobility.Steer == true or mobility.Kind == "Caster" or mobility.Kind == "OmniWheel" then
+			if mobility.Kind == "OmniWheel" then
+				add(groups,"StrafeLeft",componentId); add(groups,"StrafeRight",componentId)
+			elseif mobility.Steer == true and mobility.FreeCaster ~= true then
 				add(groups,"SteerLeft",componentId); add(groups,"SteerRight",componentId)
 			end
-			add(groups,"Brake",componentId)
+			if mobility.Kind ~= "Drivetrain" then add(groups,"Brake",componentId) end
 		end
 		local propulsion = component.Propulsion
 		if propulsion then
@@ -148,9 +150,6 @@ function Control:ClearMech(mechId: string)
 	if mech then for _,component in pairs(mech.Components) do if component.Metadata then component.Metadata.ControlState={} end end end
 end
 
--- Trusted-server intent path for AI/tutorial/autopilot systems. It deliberately shares the
--- exact same component groups and state mutation as player controls, so AI cannot bypass
--- vehicle, propulsion, power or aerodynamic simulation rules.
 function Control:SetServerAction(mechId: string, action: string, active: boolean, aim: any?): boolean
 	if type(mechId) ~= "string" or not VALID_ACTIONS[action] or type(active) ~= "boolean" then return false end
 	local mech = self._mechs:Get(mechId)
@@ -189,6 +188,7 @@ function Control:_cleanupPlayer(userId: number)
 end
 
 function Control:Start()
+	if not self._remote:IsA("RemoteEvent") then error("[ControlService] RequestControlAction must be RemoteEvent") end
 	self._remote.OnServerEvent:Connect(function(player,packet) self:Dispatch(player,packet) end)
 	Players.PlayerRemoving:Connect(function(player) self:_cleanupPlayer(player.UserId) end)
 	RunService.Heartbeat:Connect(function()
@@ -200,4 +200,5 @@ function Control:Start()
 end
 
 function Control:DebugGroups(mechId: string) return self._groups[mechId] or {} end
+function Control:IsValidAction(action: string): boolean return VALID_ACTIONS[action] == true end
 return Control
