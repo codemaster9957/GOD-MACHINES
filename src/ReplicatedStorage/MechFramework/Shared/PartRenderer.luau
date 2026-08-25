@@ -68,6 +68,14 @@ local function localTransform(value: CFrame, mirrorX: boolean): CFrame
 	return if mirrorX then BuildMath.MirrorX(value) else value
 end
 
+local function hasSeatGeometry(definition: any): boolean
+	for _,item in ipairs(definition.Geometry or {}) do
+		local kind=tostring(item.Kind or "")
+		if kind=="Seat" or kind=="VehicleSeat" then return true end
+	end
+	return false
+end
+
 function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	assert(type(definition)=="table" and typeof(definition.Size)=="Vector3","PartRenderer requires a valid definition")
 	options=options or {}
@@ -75,6 +83,7 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	local transform=if typeof(options.CFrame)=="CFrame" then options.CFrame else CFrame.identity
 	local paint=options.Paint
 	local mirrorX=options.MirrorX==true
+	local containsSeat=hasSeatGeometry(definition)
 
 	local model=Instance.new("Model")
 	model.Name=tostring(options.Name or definition.Id or "Component")
@@ -91,7 +100,9 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	root.Material=Enum.Material.SmoothPlastic
 	root.CastShadow=false
 	root.Anchored=mode=="Preview" or options.Anchored==true
-	root.CanCollide=mode=="Runtime" and definition.Pilot==nil
+	-- Seat-bearing cockpits need an open bounds collider so the avatar can physically reach the seat.
+	-- Remote/AI control cores are still solid because they have Pilot metadata but no seat geometry.
+	root.CanCollide=mode=="Runtime" and not containsSeat
 	root.CanTouch=mode=="Runtime"
 	root.CanQuery=mode=="Runtime"
 	root.Massless=mode=="Preview"
