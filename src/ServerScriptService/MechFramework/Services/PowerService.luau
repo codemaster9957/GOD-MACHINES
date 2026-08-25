@@ -127,7 +127,8 @@ function PowerService:Evaluate(mechId: string, dt: number?): {[string]: any}?
 				if enabled and configuredGeneration>0 then fuelFraction=self:_generatorFuelFraction(mechId,component,elapsed) end
 				meta.FuelFraction=fuelFraction
 				local generation = if enabled then configuredGeneration*fuelFraction else 0
-				local output = if enabled then math.max(0, number(config.MaximumOutput, generation))*fuelFraction else 0
+				local configuredOutput = math.max(0,number(config.MaximumOutput,configuredGeneration))
+				local output = if enabled then configuredOutput*fuelFraction else 0
 				local efficiency = math.clamp(number(meta.PowerEfficiency, 1), 0, 1)
 				production += math.min(generation, output) * efficiency
 				maximumOutput += output
