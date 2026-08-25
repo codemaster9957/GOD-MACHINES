@@ -1,5 +1,5 @@
 --!strict
--- Data-only collection content. Rarity describes scarcity/specialisation, not power.
+-- Collection-only data: materials, crafting and loot. Buildable PartTypes are owned by PartCatalog/PartRegistry.
 local Definitions = {}
 
 Definitions.Rarities = table.freeze({
@@ -10,9 +10,8 @@ Definitions.Rarities = table.freeze({
 })
 
 Definitions.Categories = table.freeze({
-	"StructuralFrames", "Armour", "Wheels", "Tracks", "LegComponents", "Engines",
-	"Thrusters", "Generators", "Batteries", "Cooling", "Sensors", "Weapons", "Ammo",
-	"MechanicalJoints", "UtilitySystems", "ExperimentalParts",
+	"Structural", "Armour", "Mobility", "Propulsion", "Aerodynamics",
+	"PowerCooling", "Control", "Weapons", "Utility",
 })
 
 Definitions.Materials = table.freeze({
@@ -25,20 +24,12 @@ Definitions.Materials = table.freeze({
 	RareReactorMaterials = { Name = "Rare Reactor Materials", Tradable = true },
 })
 
--- Stackable=false means each acquired part receives its own identity and condition.
-Definitions.Parts = table.freeze({
-	StructuralFrame = { Category = "StructuralFrames", Rarity = "Common", Stackable = true, MaxDurability = 250 },
-	SmallReactor = { Category = "Generators", Rarity = "Uncommon", Stackable = false, MaxDurability = 180 },
-	Autocannon = { Category = "Weapons", Rarity = "Uncommon", Stackable = false, MaxDurability = 120 },
-	LightweightEngine = { Category = "Engines", Rarity = "Common", Stackable = false, MaxDurability = 140, Tags = { "Lightweight", "Efficient" } },
-	CompositePlate = { Category = "Armour", Rarity = "Rare", Stackable = false, MaxDurability = 320 },
-	PrototypeThruster = { Category = "ExperimentalParts", Rarity = "Experimental", Stackable = false, MaxDurability = 90 },
-})
-
 Definitions.Recipes = table.freeze({
 	StructuralFrame = { Output = { Kind = "Part", Id = "StructuralFrame", Amount = 1 }, Costs = { ScrapMetal = 12, Steel = 6 } },
-	LightweightEngine = { Output = { Kind = "Part", Id = "LightweightEngine", Amount = 1 }, Costs = { Steel = 8, Electronics = 5, EnergyCells = 2 } },
-	CompositePlate = { Output = { Kind = "Part", Id = "CompositePlate", Amount = 1 }, Costs = { Steel = 4, Titanium = 3, CompositeArmour = 5 } },
+	SmallCombustionEngine = { Output = { Kind = "Part", Id = "SmallCombustionEngine", Amount = 1 }, Costs = { Steel = 8, Electronics = 5, EnergyCells = 2 } },
+	CompositeShell = { Output = { Kind = "Part", Id = "CompositeShell", Amount = 1 }, Costs = { Steel = 4, Titanium = 3, CompositeArmour = 5 } },
+	BatteryPack = { Output = { Kind = "Part", Id = "BatteryPack", Amount = 1 }, Costs = { Steel = 5, Electronics = 4, EnergyCells = 8 } },
+	Radiator = { Output = { Kind = "Part", Id = "Radiator", Amount = 1 }, Costs = { ScrapMetal = 5, Steel = 4 } },
 })
 
 Definitions.LootTables = table.freeze({
@@ -51,7 +42,7 @@ Definitions.LootTables = table.freeze({
 		{ Kind = "Material", Id = "Titanium", Min = 2, Max = 6, Weight = 35 },
 		{ Kind = "Material", Id = "RareReactorMaterials", Min = 1, Max = 2, Weight = 10 },
 		{ Kind = "Part", Id = "SmallReactor", Min = 1, Max = 1, Weight = 30, Condition = { 0.2, 0.65 } },
-		{ Kind = "Part", Id = "PrototypeThruster", Min = 1, Max = 1, Weight = 5, Condition = { 0.15, 0.5 } },
+		{ Kind = "Part", Id = "VectorThruster", Min = 1, Max = 1, Weight = 5, Condition = { 0.15, 0.5 } },
 	} },
 	Mission = { Rolls = 2, Entries = { { Kind = "Material", Id = "Steel", Min = 5, Max = 12, Weight = 1 } } },
 	Crate = { Rolls = 1, Entries = { { Kind = "Material", Id = "EnergyCells", Min = 2, Max = 5, Weight = 1 } } },
