@@ -10,7 +10,7 @@ local COLORS={
 	AccentSoft=Color3.fromRGB(93,72,37),Good=Color3.fromRGB(77,232,139),Bad=Color3.fromRGB(255,81,81),Blue=Color3.fromRGB(89,174,255),
 }
 local MATERIALS={"Metal","SmoothPlastic","DiamondPlate","CorrodedMetal","Granite","Slate"}
-local CONTROL_ACTIONS={"ThrottleForward","ThrottleReverse","SteerLeft","SteerRight","Brake","VerticalUp","VerticalDown","PitchUp","PitchDown","YawLeft","YawRight","RollLeft","RollRight","Primary","Secondary","Utility","Reload","Mechanism1","Mechanism2"}
+local CONTROL_ACTIONS={"ThrottleForward","ThrottleReverse","SteerLeft","SteerRight","StrafeLeft","StrafeRight","Brake","VerticalUp","VerticalDown","PitchUp","PitchDown","YawLeft","YawRight","RollLeft","RollRight","Primary","Secondary","Utility","Reload","Mechanism1","Mechanism2"}
 
 local function corner(parent,radius) local item=Instance.new("UICorner"); item.CornerRadius=UDim.new(0,radius or 6); item.Parent=parent end
 local function stroke(parent,transparency) local item=Instance.new("UIStroke"); item.Color=COLORS.Border; item.Transparency=transparency or .3; item.Thickness=1; item.Parent=parent; return item end
