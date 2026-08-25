@@ -82,6 +82,7 @@ local function encodedBytes(value:any):number?
 end
 
 function Save:Init(container:any) self._inventory=container:Get("InventoryService") end
+function Save:IsReady(userId:number):boolean return self._sessions[userId]~=nil end
 function Save:RegisterMigration(fromVersion:number,migrate:(any)->any)
 	assert(fromVersion>=0 and self._migrations[fromVersion]==nil,"Invalid duplicate migration"); self._migrations[fromVersion]=migrate
 end
@@ -123,9 +124,9 @@ function Save:_grantStudioBuildInventory(userId:number)
 	if RunService:IsStudio() and Config.Debug then self._inventory:EnsureStudioBuildInventory(userId) end
 end
 function Save:_loadStudio(player:Player)
-	local userId=player.UserId; if self._sessions[userId] then return end
+	local userId=player.UserId; if self._sessions[userId] then player:SetAttribute("GMProfileReady",true); return end
 	self._sessions[userId]={Id="StudioLocal:"..tostring(userId),Key="",LastSave=os.clock(),LocalOnly=true}; self._inventory:Restore(userId,{}); self._blueprints[userId]={}
-	self:_grantStudioBuildInventory(userId); print("[MechFramework] Studio local save session ready",userId)
+	self:_grantStudioBuildInventory(userId); player:SetAttribute("GMProfileReady",true); print("[MechFramework] Studio local save session ready",userId)
 end
 
 function Save:_releaseRemoteLock(key:string,sessionId:string)
@@ -142,7 +143,7 @@ end
 
 function Save:_load(player:Player)
 	if RunService:IsStudio() and Config.Debug then self:_loadStudio(player); return end
-	local userId=player.UserId; if self._sessions[userId] then return end
+	local userId=player.UserId; if self._sessions[userId] then player:SetAttribute("GMProfileReady",true); return end
 	local sessionId=HttpService:GenerateGUID(false); local key="Player_"..userId; local now=os.time(); local acquired=false
 	local ok,record=retry(function()
 		return store:UpdateAsync(key,function(old:any)
@@ -169,6 +170,7 @@ function Save:_load(player:Player)
 	record=migratedRecord
 	self._sessions[userId]={Id=sessionId,Key=key,LastSave=os.clock(),LocalOnly=false}
 	self._inventory:Restore(userId,record.Inventory or {}); self._blueprints[userId]=clone(record.Blueprints or {})
+	player:SetAttribute("GMProfileReady",true)
 end
 function Save:_releaseLocal(userId:number) self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end
 function Save:_save(userId:number,release:boolean):boolean
@@ -197,9 +199,13 @@ function Save:_save(userId:number,release:boolean):boolean
 	return committed
 end
 function Save:Start()
-	Players.PlayerAdded:Connect(function(player) task.spawn(function() self:_load(player) end) end)
-	Players.PlayerRemoving:Connect(function(player) self:_save(player.UserId,true) end)
-	for _,player in ipairs(Players:GetPlayers()) do task.spawn(function() self:_load(player) end) end
+	local function beginLoad(player:Player)
+		player:SetAttribute("GMProfileReady",false)
+		task.spawn(function() self:_load(player) end)
+	end
+	Players.PlayerAdded:Connect(beginLoad)
+	Players.PlayerRemoving:Connect(function(player) player:SetAttribute("GMProfileReady",false); self:_save(player.UserId,true) end)
+	for _,player in ipairs(Players:GetPlayers()) do beginLoad(player) end
 	task.spawn(function()
 		while not self._closing do task.wait(10); for userId,session in pairs(self._sessions) do if os.clock()-session.LastSave>=AUTOSAVE_SECONDS then task.spawn(function() self:_save(userId,false) end) end end end
 	end)
