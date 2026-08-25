@@ -1,16 +1,9 @@
 --!strict
--- One server-owned resolver handles every data-driven delivery mode.
-
---------------------------------------------------
--- SERVICES
---------------------------------------------------
+-- One server-owned resolver handles every data-driven weapon delivery mode.
+-- Hits carry real damage type/penetration context and guided projectiles home toward a server-acquired target.
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-
---------------------------------------------------
--- TYPES
---------------------------------------------------
 
 type ProjectileData = {
 	Position: Vector3,
@@ -18,628 +11,215 @@ type ProjectileData = {
 	Life: number,
 	Config: any,
 	Context: any,
+	Target: BasePart?,
 }
 
-type ProjectileMap = {
-	[number]: ProjectileData,
-}
-
---------------------------------------------------
--- SERVICE
---------------------------------------------------
+type ProjectileMap = {[number]: ProjectileData}
 
 local Projectile: any = {
 	_active = {} :: ProjectileMap,
 	_nextId = 0,
-
 	_damage = nil,
+	_matches = nil,
 }
 
---------------------------------------------------
--- INIT
---------------------------------------------------
-
 function Projectile:Init(container: any)
-	self._damage =
-		container:Get("DamageService")
+	self._damage = container:Get("DamageService")
+	self._matches = if container:Has("MatchService") then container:Get("MatchService") else nil
 end
 
---------------------------------------------------
--- FIND COMPONENT FROM INSTANCE
---------------------------------------------------
-
-local function componentFrom(
-	part: Instance?
-): (string?, string?)
-
+local function componentFrom(part: Instance?): (string?, string?)
 	local current: Instance? = part
-
 	while current do
-		local mechId =
-			current:GetAttribute("MechId")
-
-		local componentId =
-			current:GetAttribute("ComponentId")
-
-		if
-			type(mechId) == "string"
-			and type(componentId) == "string"
-		then
-			return mechId, componentId
-		end
-
-		current = current.Parent
+		local mechId = current:GetAttribute("MechId")
+		local componentId = current:GetAttribute("ComponentId")
+		if type(mechId)=="string" and type(componentId)=="string" then return mechId,componentId end
+		current=current.Parent
 	end
-
-	return nil, nil
+	return nil,nil
 end
 
---------------------------------------------------
--- BUILD IGNORE LIST
---------------------------------------------------
-
-local function getIgnoreList(
-	context: any
-): {Instance}
-
-	local ignoreList: {Instance} = {}
-
-	if
-		context
-		and typeof(context.Ignore) == "Instance"
-	then
-		table.insert(
-			ignoreList,
-			context.Ignore
-		)
-	end
-
-	return ignoreList
+local function getIgnoreList(context: any): {Instance}
+	local out: {Instance} = {}
+	if context and typeof(context.Ignore)=="Instance" then table.insert(out,context.Ignore) end
+	return out
 end
 
---------------------------------------------------
--- APPLY HIT
---------------------------------------------------
+local function damageType(config: any): string
+	local category=tostring(config.Category or "")
+	local mode=tostring(config.Mode or "")
+	if mode=="Melee" then return "Melee" end
+	if category=="Flamethrower" then return "Heat" end
+	if category=="Laser" or category=="Plasma" then return "Energy" end
+	if (tonumber(config.ExplosionRadius) or 0)>0 or category=="Missile" or category=="Rocket" then return "Explosive" end
+	return "Kinetic"
+end
 
-function Projectile:_apply(
-	hit: RaycastResult,
-	config: any,
-	context: any
-)
+function Projectile:_apply(hit: RaycastResult, config: any, context: any)
+	local mechId,componentId=componentFrom(hit.Instance)
+	local damage=math.max(0,tonumber(config.Damage) or 0)
+	local kind=damageType(config)
+	local penetration=math.max(0,tonumber(config.Penetration) or 0)
+	local directKey: string? = nil
 
-	local mechId, componentId =
-		componentFrom(
-			hit.Instance
-		)
-
-	local damage =
-		tonumber(config.Damage) or 0
-
-	--------------------------------------------------
-	-- DIRECT DAMAGE
-	--------------------------------------------------
-
-	if
-		mechId
-		and componentId
-		and mechId ~= context.MechId
-	then
-
-		self._damage:Apply(
-			mechId,
-			componentId,
-			damage,
-			{
-				Source =
-					context.WeaponId,
-
-				Owner =
-					context.UserId,
-
-				Position =
-					hit.Position,
-			}
-		)
+	if mechId and componentId and mechId~=context.MechId and damage>0 then
+		directKey=mechId..":"..componentId
+		self._damage:Apply(mechId,componentId,damage,{
+			Source=context.WeaponId, Owner=context.UserId, Position=hit.Position,
+			DamageType=kind, Penetration=penetration,
+		})
 	end
 
-	--------------------------------------------------
-	-- EXPLOSION
-	--------------------------------------------------
-
-	local radius =
-		tonumber(
-			config.ExplosionRadius
-		) or 0
-
-	if radius <= 0 then
-		return
-	end
-
-	local overlap =
-		OverlapParams.new()
-
-	overlap.FilterType =
-		Enum.RaycastFilterType.Exclude
-
-	overlap.FilterDescendantsInstances =
-		getIgnoreList(context)
-
-	--------------------------------------------------
-	-- PREVENT DUPLICATE COMPONENT DAMAGE
-	--------------------------------------------------
-
+	local radius=math.max(0,tonumber(config.ExplosionRadius) or 0)
+	if radius<=0 then return end
+	local overlap=OverlapParams.new()
+	overlap.FilterType=Enum.RaycastFilterType.Exclude
+	overlap.FilterDescendantsInstances=getIgnoreList(context)
 	local seen: {[string]: boolean} = {}
+	if directKey then seen[directKey]=true end -- direct impact already received full damage
 
-	local nearbyParts =
-		Workspace:GetPartBoundsInRadius(
-			hit.Position,
-			radius,
-			overlap
-		)
-
-	for _, part in ipairs(nearbyParts) do
-
-		local targetMech, targetComponent =
-			componentFrom(part)
-
-		if
-			not targetMech
-			or not targetComponent
-		then
-			continue
+	for _,part in ipairs(Workspace:GetPartBoundsInRadius(hit.Position,radius,overlap)) do
+		local targetMech,targetComponent=componentFrom(part)
+		if not targetMech or not targetComponent or targetMech==context.MechId then continue end
+		local key=targetMech..":"..targetComponent
+		if seen[key] then continue end
+		seen[key]=true
+		local distance=(part.Position-hit.Position).Magnitude
+		local falloff=1-math.clamp(distance/radius,0,1)
+		local amount=damage*falloff
+		if amount>0 then
+			self._damage:Apply(targetMech,targetComponent,amount,{
+				Source=context.WeaponId, Owner=context.UserId, Explosion=true, Position=hit.Position,
+				DamageType="Explosive", Penetration=penetration*.35,
+			})
 		end
-
-		if targetMech == context.MechId then
-			continue
-		end
-
-		local key =
-			targetMech
-			.. ":"
-			.. targetComponent
-
-		if seen[key] then
-			continue
-		end
-
-		seen[key] = true
-
-		--------------------------------------------------
-		-- DISTANCE FALLOFF
-		--------------------------------------------------
-
-		local distance =
-			(
-				part.Position
-				- hit.Position
-			).Magnitude
-
-		local falloff =
-			1
-		- math.clamp(
-			distance / radius,
-			0,
-			1
-		)
-
-		local explosionDamage =
-			damage * falloff
-
-		if explosionDamage <= 0 then
-			continue
-		end
-
-		self._damage:Apply(
-			targetMech,
-			targetComponent,
-			explosionDamage,
-			{
-				Source =
-					context.WeaponId,
-
-				Owner =
-					context.UserId,
-
-				Explosion =
-					true,
-
-				Position =
-					hit.Position,
-			}
-		)
 	end
 end
 
---------------------------------------------------
--- RAYCAST / PENETRATION
---------------------------------------------------
+function Projectile:_cast(origin: Vector3, direction: Vector3, distance: number, config: any, context: any): boolean
+	if distance<=0 or direction.Magnitude<=.0001 then return false end
+	local unit=direction.Unit
+	local params=RaycastParams.new()
+	params.FilterType=Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances=getIgnoreList(context)
+	local remaining=distance
+	local start=origin
+	local penetration=math.max(0,tonumber(config.Penetration) or 0)
 
-function Projectile:_cast(
-	origin: Vector3,
-	direction: Vector3,
-	distance: number,
-	config: any,
-	context: any
-): boolean
-
-	if distance <= 0 then
-		return false
+	while remaining>.001 do
+		local hit=Workspace:Raycast(start,unit*remaining,params)
+		if not hit then return false end
+		self:_apply(hit,config,context)
+		local resistance=1
+		if hit.Instance:IsA("BasePart") then resistance=math.max(1,hit.Instance.Size.Magnitude) end
+		if penetration<resistance then return true end
+		penetration-=resistance
+		local travelled=(hit.Position-start).Magnitude
+		remaining-=travelled+.05
+		start=hit.Position+unit*.05
 	end
-
-	if direction.Magnitude <= 0.0001 then
-		return false
-	end
-
-	local unitDirection =
-		direction.Unit
-
-	local params =
-		RaycastParams.new()
-
-	params.FilterType =
-		Enum.RaycastFilterType.Exclude
-
-	params.FilterDescendantsInstances =
-		getIgnoreList(context)
-
-	--------------------------------------------------
-	-- PENETRATION STATE
-	--------------------------------------------------
-
-	local remaining =
-		distance
-
-	local start =
-		origin
-
-	local penetration =
-		math.max(
-			0,
-			tonumber(config.Penetration) or 0
-		)
-
-	while remaining > 0.001 do
-
-		local hit =
-			Workspace:Raycast(
-				start,
-				unitDirection * remaining,
-				params
-			)
-
-		if not hit then
-			return false
-		end
-
-		--------------------------------------------------
-		-- APPLY HIT
-		--------------------------------------------------
-
-		self:_apply(
-			hit,
-			config,
-			context
-		)
-
-		--------------------------------------------------
-		-- CALCULATE RESISTANCE
-		--------------------------------------------------
-
-		local resistance = 1
-
-		if hit.Instance:IsA("BasePart") then
-			resistance =
-				math.max(
-					1,
-					hit.Instance.Size.Magnitude
-				)
-		end
-
-		--------------------------------------------------
-		-- STOP IF PENETRATION IS TOO LOW
-		--------------------------------------------------
-
-		if penetration < resistance then
-			return true
-		end
-
-		penetration -= resistance
-
-		--------------------------------------------------
-		-- CONTINUE BEYOND HIT
-		--------------------------------------------------
-
-		local travelled =
-			(
-				hit.Position
-				- start
-			).Magnitude
-
-		remaining -=
-			travelled + 0.05
-
-		start =
-			hit.Position
-			+ unitDirection * 0.05
-	end
-
 	return true
 end
 
---------------------------------------------------
--- SPREAD DIRECTION
---------------------------------------------------
-
-local function spreadDirection(
-	direction: Vector3,
-	spreadRadians: number
-): Vector3
-
-	if spreadRadians <= 0 then
-		return direction.Unit
-	end
-
-	local base =
-		CFrame.lookAt(
-			Vector3.zero,
-			direction.Unit
-		)
-
-	local pitch =
-		(math.random() - 0.5)
-		* spreadRadians
-
-	local yaw =
-		(math.random() - 0.5)
-		* spreadRadians
-
-	return (
-		base
-			* CFrame.Angles(
-				pitch,
-				yaw,
-				0
-			)
-	).LookVector
+local function spreadDirection(direction: Vector3, spreadRadians: number): Vector3
+	if spreadRadians<=0 then return direction.Unit end
+	local base=CFrame.lookAt(Vector3.zero,direction.Unit)
+	local pitch=(math.random()-.5)*spreadRadians
+	local yaw=(math.random()-.5)*spreadRadians
+	return (base*CFrame.Angles(pitch,yaw,0)).LookVector
 end
 
---------------------------------------------------
--- FIRE
---------------------------------------------------
-
-function Projectile:Fire(
-	origin: Vector3,
-	direction: Vector3,
-	config: any,
-	context: any
-): boolean
-
-	--------------------------------------------------
-	-- VALIDATE DIRECTION
-	--------------------------------------------------
-
-	if direction.Magnitude < 0.9 then
-		return false
+function Projectile:_acquireGuidedTarget(origin: Vector3, direction: Vector3, range: number, context: any): BasePart?
+	local params=RaycastParams.new()
+	params.FilterType=Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances=getIgnoreList(context)
+	local hit=Workspace:Raycast(origin,direction.Unit*range,params)
+	if not hit or not hit.Instance:IsA("BasePart") then return nil end
+	local mechId=select(1,componentFrom(hit.Instance))
+	if not mechId or mechId==context.MechId then return nil end
+	if self._matches and self._matches.GetForMech and self._matches:GetForMech(context.MechId) then
+		if not self._matches:IsHostile(context.MechId,mechId) then return nil end
 	end
+	return hit.Instance
+end
 
-	--------------------------------------------------
-	-- WEAPON CONFIG
-	--------------------------------------------------
+local function steerToward(current: Vector3, desired: Vector3, maxRadians: number): Vector3
+	if current.Magnitude<.001 or desired.Magnitude<.001 then return current end
+	local a=current.Unit
+	local b=desired.Unit
+	local dot=math.clamp(a:Dot(b),-1,1)
+	local angle=math.acos(dot)
+	if angle<=maxRadians or angle<1e-5 then return b*current.Magnitude end
+	local alpha=math.clamp(maxRadians/angle,0,1)
+	local blended=a:Lerp(b,alpha)
+	if blended.Magnitude<.001 then return current end
+	return blended.Unit*current.Magnitude
+end
 
-	local pellets =
-		math.clamp(
-			math.floor(
-				tonumber(config.Pellets)
-				or 1
-			),
-			1,
-			64
-		)
+function Projectile:Fire(origin: Vector3, direction: Vector3, config: any, context: any): boolean
+	if direction.Magnitude<.9 then return false end
+	local pellets=math.clamp(math.floor(tonumber(config.Pellets) or 1),1,64)
+	local spread=math.rad(tonumber(config.Spread) or 0)
+	local range=math.max(0,tonumber(config.Range) or 1000)
+	if range<=0 then return false end
 
-	local spread =
-		math.rad(
-			tonumber(config.Spread)
-			or 0
-		)
-
-	local range =
-		math.max(
-			0,
-			tonumber(config.Range)
-			or 1000
-		)
-
-	--------------------------------------------------
-	-- FIRE PELLETS
-	--------------------------------------------------
-
-	for _ = 1, pellets do
-
-		local dir =
-			spreadDirection(
-				direction,
-				spread
-			)
-
-		--------------------------------------------------
-		-- INSTANT DELIVERY MODES
-		--------------------------------------------------
-
-		if
-			config.Mode == "Hitscan"
-			or config.Mode == "Melee"
-			or config.Mode == "Stream"
-		then
-
-			self:_cast(
-				origin,
-				dir,
-				range,
-				config,
-				context
-			)
-
-			--------------------------------------------------
-			-- PHYSICAL PROJECTILE
-			--------------------------------------------------
-
+	for _=1,pellets do
+		local dir=spreadDirection(direction,spread)
+		local mode=tostring(config.Mode or "Projectile")
+		if mode=="Hitscan" or mode=="Melee" or mode=="Stream" then
+			self:_cast(origin,dir,range,config,context)
 		else
-			local projectileSpeed =
-				math.max(
-					1,
-					tonumber(
-						config.ProjectileSpeed
-					) or 500
-				)
-
-			local nextId: number = self._nextId
-			nextId += 1
-			self._nextId = nextId
-
-			local projectileId =
-				self._nextId
-
-			local projectile: ProjectileData = {
-				Position =
-					origin,
-
-				Velocity =
-					dir * projectileSpeed,
-
-				Life =
-					range / projectileSpeed,
-
-				Config =
-					config,
-
-				Context =
-					context,
+			local projectileSpeed=math.max(1,tonumber(config.ProjectileSpeed) or 500)
+			self._nextId+=1
+			local target: BasePart? = nil
+			if mode=="Guided" then target=self:_acquireGuidedTarget(origin,dir,range,context) end
+			self._active[self._nextId]={
+				Position=origin, Velocity=dir*projectileSpeed, Life=range/projectileSpeed,
+				Config=config, Context=context, Target=target,
 			}
-
-			local active: ProjectileMap = self._active
-			active[projectileId] = projectile
 		end
 	end
-
 	return true
 end
-
---------------------------------------------------
--- START PROJECTILE SIMULATION
---------------------------------------------------
 
 function Projectile:Start()
 	RunService.Heartbeat:Connect(function(dt: number)
+		dt=math.min(dt,.1)
+		for id,projectile in pairs(self._active) do
+			projectile.Life-=dt
+			if projectile.Life<=0 then self._active[id]=nil; continue end
 
-		--------------------------------------------------
-		-- PREVENT HUGE PHYSICS STEPS
-		--------------------------------------------------
-
-		dt = math.min(dt, 0.1)
-
-		local active: ProjectileMap =
-			self._active
-
-		--------------------------------------------------
-		-- UPDATE PROJECTILES
-		--------------------------------------------------
-
-		for id, projectile in pairs(active) do
-
-			--------------------------------------------------
-			-- LIFE
-			--------------------------------------------------
-
-			projectile.Life -= dt
-
-			if projectile.Life <= 0 then
-				active[id] = nil
-				continue
+			if tostring(projectile.Config.Mode)=="Guided" and projectile.Target and projectile.Target.Parent then
+				local desired=projectile.Target.Position-projectile.Position
+				if desired.Magnitude>.2 then
+					local degreesPerSecond=math.max(15,tonumber(projectile.Config.GuidedTurnRate) or 135)
+					projectile.Velocity=steerToward(projectile.Velocity,desired,math.rad(degreesPerSecond)*dt)
+				end
+			else
+				projectile.Target=nil
 			end
 
-			--------------------------------------------------
-			-- GRAVITY
-			--------------------------------------------------
-
-			local gravityScale =
-				tonumber(
-					projectile.Config.GravityScale
-				) or 0
-
-			local gravity =
-				Vector3.new(
-					0,
-					-Workspace.Gravity * gravityScale,
-					0
-				)
-
-			projectile.Velocity +=
-				gravity * dt
-
-			--------------------------------------------------
-			-- MOVEMENT STEP
-			--------------------------------------------------
-
-			local step =
-				projectile.Velocity * dt
-
-			local stepDistance =
-				step.Magnitude
-
-			if stepDistance <= 0.0001 then
-				continue
+			local gravityScale=tonumber(projectile.Config.GravityScale) or 0
+			projectile.Velocity+=Vector3.new(0,-Workspace.Gravity*gravityScale,0)*dt
+			local step=projectile.Velocity*dt
+			local distance=step.Magnitude
+			if distance<=.0001 then continue end
+			if self:_cast(projectile.Position,step,distance,projectile.Config,projectile.Context) then
+				self._active[id]=nil
+			else
+				projectile.Position+=step
 			end
-
-			--------------------------------------------------
-			-- COLLISION
-			--------------------------------------------------
-
-			local hit =
-				self:_cast(
-					projectile.Position,
-					step,
-					stepDistance,
-					projectile.Config,
-					projectile.Context
-				)
-
-			if hit then
-				active[id] = nil
-				continue
-			end
-
-			--------------------------------------------------
-			-- ADVANCE
-			--------------------------------------------------
-
-			projectile.Position += step
 		end
 	end)
 end
 
---------------------------------------------------
--- DEBUG STATE
---------------------------------------------------
-
-function Projectile:DebugState(): {
-	ActiveProjectiles: number,
-	}
-	local count = 0
-
-	local active: ProjectileMap =
-		self._active
-
-	for _ in pairs(active) do
-		count += 1
+function Projectile:DebugState(): {ActiveProjectiles: number, GuidedProjectiles: number}
+	local count,guided=0,0
+	for _,projectile in pairs(self._active) do
+		count+=1
+		if tostring(projectile.Config.Mode)=="Guided" then guided+=1 end
 	end
-
-	return {
-		ActiveProjectiles = count,
-	}
+	return {ActiveProjectiles=count,GuidedProjectiles=guided}
 end
-
---------------------------------------------------
--- RETURN
---------------------------------------------------
 
 return Projectile
