@@ -76,6 +76,9 @@ function Combat:Init(container: any)
 
 	self._projectiles =
 		container:Get("ProjectileService")
+
+	self._feedback =
+		ReplicatedStorage.MechFramework.Remotes.Events.CombatFeedback
 end
 
 --------------------------------------------------
@@ -355,8 +358,9 @@ function Combat:Fire(
 	-- AIM
 	--------------------------------------------------
 
+	local muzzle = part:FindFirstChild("Muzzle")
 	local origin: Vector3 =
-		part.Position
+		if muzzle and muzzle:IsA("Attachment") then muzzle.WorldPosition else part.Position
 
 	local forward: Vector3 =
 		part.CFrame.LookVector
@@ -498,11 +502,19 @@ function Combat:Fire(
 	-- FIRE PROJECTILE
 	--------------------------------------------------
 
+	local effectColor =
+		if muzzle and muzzle:IsA("Attachment") and typeof(muzzle:GetAttribute("EffectColor")) == "Color3"
+		then muzzle:GetAttribute("EffectColor")
+		else Color3.fromRGB(255, 181, 54)
+
 	local projectileContext: any = {
 		MechId = mechId,
 		WeaponId = weaponId,
 		UserId = userId,
 		Ignore = part.Parent,
+		DamageType = config.DamageType,
+		Penetration = config.Penetration,
+		EffectColor = effectColor,
 	}
 
 	local projectileSuccess: any =
@@ -516,6 +528,16 @@ function Combat:Fire(
 	if projectileSuccess == false then
 		return false, "ProjectileRejected"
 	end
+
+	self._feedback:FireAllClients({
+		Kind = "Fired",
+		Origin = origin,
+		Direction = direction,
+		Range = math.clamp(tonumber(config.Range) or 1000, 0, 5000),
+		Mode = tostring(config.Mode or "Hitscan"),
+		Color = effectColor,
+		WeaponId = weaponId,
+	})
 
 	--------------------------------------------------
 	-- RECOIL
