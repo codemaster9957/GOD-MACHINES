@@ -37,23 +37,12 @@ local function ensureForce(root: BasePart): VectorForce
 	return force
 end
 
-local function mechanicalPower(mech: any): number
-	local total=0
-	for _, component in pairs(mech.Components) do
-		local p=component.Propulsion
-		if p and (p.Kind=="Engine" or p.Kind=="Motor") then
-			local fraction=if p.Kind=="Motor" then math.clamp(tonumber(component.Metadata and component.Metadata.PowerFraction) or 0,0,1) else 1
-			total+=math.max(0,tonumber(p.MechanicalPower) or 0)*fraction
-		end
-	end
-	return total
-end
-
 local function availableFuel(mech: any): number
 	local total=0
-	for _, component in pairs(mech.Components) do
+	for _,component in pairs(mech.Components) do
 		if component.Fuel and tonumber(component.Fuel.Capacity) and tonumber(component.Fuel.Capacity)>0 then
-			component.Fuel.Amount=math.clamp(tonumber(component.Fuel.Amount) or tonumber(component.Fuel.Capacity),0,tonumber(component.Fuel.Capacity))
+			local capacity=tonumber(component.Fuel.Capacity)
+			component.Fuel.Amount=math.clamp(tonumber(component.Fuel.Amount) or capacity,0,capacity)
 			total+=component.Fuel.Amount
 		end
 	end
@@ -64,16 +53,28 @@ local function consumeFuel(mech: any, amount: number): boolean
 	if amount<=0 then return true end
 	if availableFuel(mech)+1e-6<amount then return false end
 	local remaining=amount
-	for _, component in pairs(mech.Components) do
+	for _,component in pairs(mech.Components) do
 		if remaining<=0 then break end
 		if component.Fuel and tonumber(component.Fuel.Capacity) and tonumber(component.Fuel.Capacity)>0 then
-			local current=tonumber(component.Fuel.Amount) or tonumber(component.Fuel.Capacity)
+			local capacity=tonumber(component.Fuel.Capacity)
+			local current=math.clamp(tonumber(component.Fuel.Amount) or capacity,0,capacity)
 			local used=math.min(current,remaining)
-			component.Fuel.Amount=current-used
-			remaining-=used
+			component.Fuel.Amount=current-used; remaining-=used
 		end
 	end
-	return true
+	return remaining<=1e-6
+end
+
+local function mechanicalPower(mech: any): number
+	local total=0
+	for _,component in pairs(mech.Components) do
+		local p=component.Propulsion
+		if p and (p.Kind=="Engine" or p.Kind=="Motor") and not component.Destroyed then
+			local fraction=math.clamp(tonumber(component.Metadata and component.Metadata.PropulsionFraction) or 0,0,1)
+			total+=math.max(0,tonumber(p.MechanicalPower) or 0)*fraction
+		end
+	end
+	return total
 end
 
 function Propulsion:Init(container: any)
@@ -84,32 +85,55 @@ function Propulsion:_stepModel(model: Model, dt: number)
 	if model:GetAttribute("EditMode")~=false or not model.PrimaryPart then return end
 	local mech=self._mechs:Get(model.Name)
 	if not mech then return end
+
+	-- Update engine/motor availability first. This is the shared truth consumed by VehicleService
+	-- and by downstream mechanical propellers on the next simulation step.
+	for _,component in pairs(mech.Components) do
+		local p=component.Propulsion
+		if component.Destroyed or not p or (p.Kind~="Engine" and p.Kind~="Motor") then continue end
+		component.Metadata=component.Metadata or {}
+		local state=component.Metadata.ControlState or {}
+		local throttle=math.abs(axis(state,"ThrottleForward","ThrottleReverse"))
+		local resourceFraction=1
+		if p.Kind=="Motor" then resourceFraction=math.clamp(tonumber(component.Metadata.PowerFraction) or 0,0,1) end
+		local fuelUse=math.max(0,tonumber(p.FuelUse) or 0)*throttle*dt
+		if fuelUse>0 and not consumeFuel(mech,fuelUse) then resourceFraction=0 end
+		component.Metadata.PropulsionFraction=throttle*resourceFraction
+	end
+
 	local mechPower=mechanicalPower(mech)
 	local demand=0
-	for _, component in pairs(mech.Components) do
+	for _,component in pairs(mech.Components) do
 		local p=component.Propulsion
-		if p and (p.Kind=="Propeller" or p.Kind=="LiftFan") then demand+=math.max(0,tonumber(p.MechanicalDemand) or 0) end
+		if p and not component.Destroyed and (p.Kind=="Propeller" or p.Kind=="LiftFan") then demand+=math.max(0,tonumber(p.MechanicalDemand) or 0) end
 	end
 	local mechanicalFraction=if demand>0 then math.clamp(mechPower/demand,0,1) else 1
 
-	for id, component in pairs(mech.Components) do
+	for id,component in pairs(mech.Components) do
 		local p=component.Propulsion
 		if component.Destroyed or not p then continue end
 		local root=componentRoot(model,id)
 		if not root then continue end
-		local state=component.Metadata and component.Metadata.ControlState or {}
+		component.Metadata=component.Metadata or {}
+		local state=component.Metadata.ControlState or {}
 		local kind=tostring(p.Kind or "")
 		local throttle=axis(state,"ThrottleForward","ThrottleReverse")
 		if kind=="LiftFan" then throttle=axis(state,"VerticalUp","VerticalDown") end
 		if kind=="Jet" or kind=="Rocket" or kind=="Vector" then throttle=math.max(0,throttle) end
-		local powerFraction=math.clamp(tonumber(component.Metadata and component.Metadata.PowerFraction) or 1,0,1)
-		if kind=="Engine" then powerFraction=1 end
+
+		local powerFraction=math.clamp(tonumber(component.Metadata.PowerFraction) or 1,0,1)
+		if kind=="Engine" then powerFraction=math.clamp(tonumber(component.Metadata.PropulsionFraction) or 0,0,1) end
+		if kind=="Motor" then powerFraction=math.clamp(tonumber(component.Metadata.PropulsionFraction) or 0,0,1) end
 		if kind=="Propeller" or kind=="LiftFan" then powerFraction*=mechanicalFraction end
-		local fuelUse=math.max(0,tonumber(p.FuelUse) or 0)*math.abs(throttle)*dt
-		if fuelUse>0 and not consumeFuel(mech,fuelUse) then throttle=0 end
+
+		if kind~="Engine" and kind~="Motor" then
+			local fuelUse=math.max(0,tonumber(p.FuelUse) or 0)*math.abs(throttle)*dt
+			if fuelUse>0 and not consumeFuel(mech,fuelUse) then throttle=0; powerFraction=0 end
+		end
+		component.Metadata.PropulsionFraction=math.abs(throttle)*powerFraction
+
 		local force=ensureForce(root)
 		force.Force=Vector3.zero
-
 		local magnitude=math.max(0,tonumber(p.Force) or 0)*throttle*powerFraction
 		if magnitude~=0 then
 			local localDirection=if typeof(p.Direction)=="Vector3" then p.Direction else Vector3.new(0,0,-1)
@@ -125,7 +149,7 @@ function Propulsion:_stepModel(model: Model, dt: number)
 		local visual=componentModel(model,id)
 		if visual then
 			local key=model.Name..":"..id
-			self._angles[key]=(self._angles[key] or 0)+dt*(5+math.abs(throttle)*28)
+			self._angles[key]=(self._angles[key] or 0)+dt*(2+math.abs(throttle)*32*math.max(.15,powerFraction))
 			PartRenderer.SetSpinner(visual,"EngineSpinner",self._angles[key])
 			PartRenderer.SetSpinner(visual,"TurbineSpinner",self._angles[key])
 			PartRenderer.SetSpinner(visual,"PropellerSpinner",self._angles[key])
@@ -140,7 +164,7 @@ function Propulsion:Start()
 		local step=self._accumulator; self._accumulator=0
 		local assemblies=Workspace:FindFirstChild("MechAssemblies")
 		if not assemblies then return end
-		for _, model in ipairs(assemblies:GetChildren()) do if model:IsA("Model") then self:_stepModel(model,step) end end
+		for _,model in ipairs(assemblies:GetChildren()) do if model:IsA("Model") then self:_stepModel(model,step) end end
 	end)
 end
 
