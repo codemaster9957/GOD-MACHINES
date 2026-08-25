@@ -1,6 +1,6 @@
 --!strict
 -- Connected, scheduled power simulation. Power is a rate; battery Charge is stored energy.
--- Read-only evaluations never mutate stored energy. Instant burst consumers drain real network storage.
+-- Read-only evaluations never mutate stored energy or fuel. Instant burst consumers drain real network storage.
 
 local PowerService: any = {
 	_cache = {},
@@ -9,8 +9,6 @@ local PowerService: any = {
 	_tickRate = 0.25,
 }
 
--- StorageOutput is a power rating. Instant weapon draws may use at most one second of that
--- rating per transaction, which makes capacitors/high-output batteries meaningfully different.
 local BURST_OUTPUT_WINDOW = 1
 
 local function number(value: any, fallback: number): number
@@ -25,6 +23,7 @@ end
 
 function PowerService:Init(container: any)
 	self._mechs = container:Get("MechService")
+	self._fuel = container:Get("FuelService")
 end
 
 function PowerService:Start()
@@ -83,6 +82,17 @@ local function storageSnapshot(config: any, elapsed: number): any?
 	return { Config=config, Capacity=capacity, MaxOutput=maxOutput, MaxInput=maxInput, AvailableOutput=availableOutput }
 end
 
+function PowerService:_generatorFuelFraction(mechId: string, component: any, elapsed: number): number
+	local fuel=component.Fuel
+	local use=if fuel then math.max(0,number(fuel.Use,0)) else 0
+	if use<=0 then return 1 end
+	local fuelType=tostring(fuel.Type or "Liquid")
+	if elapsed<=0 then return if self._fuel:GetAvailable(mechId,fuelType)>0 then 1 else 0 end
+	local needed=use*elapsed
+	local supplied=self._fuel:Consume(mechId,fuelType,needed,true)
+	return math.clamp((tonumber(supplied) or 0)/math.max(needed,1e-6),0,1)
+end
+
 function PowerService:Evaluate(mechId: string, dt: number?): {[string]: any}?
 	local mech = self._mechs:Get(mechId)
 	if not mech then
@@ -112,8 +122,12 @@ function PowerService:Evaluate(mechId: string, dt: number?): {[string]: any}?
 			local meta = metadata(component)
 			local enabled = meta.PowerEnabled ~= false
 			if config then
-				local generation = if enabled then math.max(0, number(config.Generation, 0)) else 0
-				local output = if enabled then math.max(0, number(config.MaximumOutput, generation)) else 0
+				local fuelFraction=1
+				local configuredGeneration=math.max(0,number(config.Generation,0))
+				if enabled and configuredGeneration>0 then fuelFraction=self:_generatorFuelFraction(mechId,component,elapsed) end
+				meta.FuelFraction=fuelFraction
+				local generation = if enabled then configuredGeneration*fuelFraction else 0
+				local output = if enabled then math.max(0, number(config.MaximumOutput, generation))*fuelFraction else 0
 				local efficiency = math.clamp(number(meta.PowerEfficiency, 1), 0, 1)
 				production += math.min(generation, output) * efficiency
 				maximumOutput += output
@@ -223,7 +237,6 @@ function PowerService:CanConsumePower(mechId: string, componentId: string, amoun
 	return network.AvailablePower>=needed
 end
 
--- Compatibility rate query. This does not consume stored energy; use ConsumeEnergy for finite burst work.
 function PowerService:RequestPower(mechId: string, componentId: string, amount: number, allowPartial: boolean?): (number,string)
 	if amount<=0 or amount~=amount or amount==math.huge then return 0,"InvalidAmount" end
 	local network=self:_networkForComponent(mechId,componentId)
@@ -233,8 +246,6 @@ function PowerService:RequestPower(mechId: string, componentId: string, amount: 
 	return supplied,if supplied>=amount then "Powered" elseif supplied>0 then "Reduced" else "Shutdown"
 end
 
--- Atomic finite-energy draw for railguns/lasers/plasma and future burst machinery.
--- Only storage can supply instant energy: generators recharge batteries/capacitors over time.
 function PowerService:ConsumeEnergy(mechId: string, componentId: string, amount: number, allowPartial: boolean?): (number,string)
 	if amount<=0 or amount~=amount or amount==math.huge then return 0,"InvalidAmount" end
 	local mech=self._mechs:Get(mechId)
@@ -244,12 +255,9 @@ function PowerService:ConsumeEnergy(mechId: string, componentId: string, amount:
 	local memberIds=networkId and topology.Networks[networkId]
 	if not memberIds then return 0,"NotPowered" end
 
-	local stores={}
-	local totalAvailable=0
+	local stores={}; local totalAvailable=0
 	for _,id in ipairs(memberIds) do
-		local component=mech.Components[id]
-		local config=component and component.Power
-		local meta=component and metadata(component)
+		local component=mech.Components[id]; local config=component and component.Power; local meta=component and metadata(component)
 		if config and component and not component.Destroyed and meta.PowerEnabled~=false then
 			local capacity=math.max(0,number(config.StorageCapacity,number(config.Capacity,0)))
 			if capacity>0 then
@@ -260,44 +268,32 @@ function PowerService:ConsumeEnergy(mechId: string, componentId: string, amount:
 			end
 		end
 	end
-
 	if totalAvailable<=0 then return 0,"NoEnergyStorage" end
 	if totalAvailable+1e-6<amount and not allowPartial then return 0,"InsufficientStoredEnergy" end
-	local supplied=math.min(amount,totalAvailable)
-	local remaining=supplied
+	local supplied=math.min(amount,totalAvailable); local remaining=supplied
 	for _,store in ipairs(stores) do
 		if remaining<=1e-6 then break end
-		local used=math.min(remaining,store.Available)
-		store.Config.Charge=math.max(0,store.Config.Charge-used)
-		remaining-=used
+		local used=math.min(remaining,store.Available); store.Config.Charge=math.max(0,store.Config.Charge-used); remaining-=used
 	end
-	self._cache[mechId]=nil
-	self._active[mechId]=true
+	self._cache[mechId]=nil; self._active[mechId]=true
 	return supplied,if supplied+1e-6>=amount then "Powered" else "Reduced"
 end
 
 function PowerService:SetPriority(mechId: string, ownerId: number, componentId: string, priority: number): (boolean,string)
-	local mech=self._mechs:Get(mechId)
-	if not mech or mech.Owner~=ownerId then return false,"NotAuthorized" end
-	local component=mech.Components[componentId]
-	if not component or component.Destroyed or not component.Power then return false,"InvalidComponent" end
+	local mech=self._mechs:Get(mechId); if not mech or mech.Owner~=ownerId then return false,"NotAuthorized" end
+	local component=mech.Components[componentId]; if not component or component.Destroyed or not component.Power then return false,"InvalidComponent" end
 	if priority~=priority or priority==math.huge or priority==-math.huge then return false,"InvalidPriority" end
-	component.Power.Priority=math.clamp(math.floor(priority),-1000000,1000000)
-	self._mechs:MarkChanged(mechId); self:Invalidate(mechId)
+	component.Power.Priority=math.clamp(math.floor(priority),-1000000,1000000); self._mechs:MarkChanged(mechId); self:Invalidate(mechId)
 	return true,"PriorityUpdated"
 end
 
 function PowerService:SetEnabled(mechId: string, ownerId: number, componentId: string, enabled: boolean): (boolean,string)
-	local mech=self._mechs:Get(mechId)
-	if not mech or mech.Owner~=ownerId then return false,"NotAuthorized" end
-	local component=mech.Components[componentId]
-	if not component or component.Destroyed or not component.Power then return false,"InvalidComponent" end
-	metadata(component).PowerEnabled=enabled
-	self._mechs:MarkChanged(mechId); self:Invalidate(mechId)
+	local mech=self._mechs:Get(mechId); if not mech or mech.Owner~=ownerId then return false,"NotAuthorized" end
+	local component=mech.Components[componentId]; if not component or component.Destroyed or not component.Power then return false,"InvalidComponent" end
+	metadata(component).PowerEnabled=enabled; self._mechs:MarkChanged(mechId); self:Invalidate(mechId)
 	return true,if enabled then "Enabled" else "Shutdown"
 end
 
 function PowerService:GetCached(mechId: string): {[string]: any}? return self._cache[mechId] end
 function PowerService:GetDebugInfo(mechId: string): any return self:Evaluate(mechId) end
-
 return PowerService
