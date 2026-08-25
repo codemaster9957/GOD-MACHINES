@@ -1,631 +1,163 @@
 --!strict
--- Server-authoritative ownership, cooldown, ammunition,
--- power, heat, state, aim, projectile firing, and physical recoil.
-
---------------------------------------------------
--- SERVICES
---------------------------------------------------
+-- Server-authoritative weapon validation, shared machine ammunition, power, heat, projectiles and recoil.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local Definitions = require(ReplicatedStorage.MechFramework.Shared.WeaponDefinitions)
 
---------------------------------------------------
--- MODULES
---------------------------------------------------
-
-local Definitions = require(
-	ReplicatedStorage.MechFramework.Shared.WeaponDefinitions
-)
-
---------------------------------------------------
--- TYPES
---------------------------------------------------
-
-type NumberMap = {
-	[string]: number,
-}
-
-type AimData = {
-	Direction: Vector3?,
-}
-
---------------------------------------------------
--- SERVICE
---------------------------------------------------
+type NumberMap = {[string]: number}
 
 local Combat: any = {
 	_lastFire = {} :: NumberMap,
-	_ammo = {} :: NumberMap,
-
+	_ammo = {} :: NumberMap, -- keyed by mech id; generic ammunition capacity is shared by ballistic weapons
 	_mechs = nil,
 	_heat = nil,
 	_power = nil,
 	_projectiles = nil,
 }
 
---------------------------------------------------
--- INIT
---------------------------------------------------
-
 function Combat:Init(container: any)
-	self._mechs =
-		container:Get("MechService")
-
-	self._heat =
-		container:Get("HeatService")
-
-	self._power =
-		container:Get("PowerService")
-
-	self._projectiles =
-		container:Get("ProjectileService")
+	self._mechs = container:Get("MechService")
+	self._heat = container:Get("HeatService")
+	self._power = container:Get("PowerService")
+	self._projectiles = container:Get("ProjectileService")
 end
 
---------------------------------------------------
--- GET PHYSICAL COMPONENT PART
---------------------------------------------------
-
-function Combat:_part(
-	mechId: string,
-	componentId: string
-): BasePart?
-
-	local root =
-		Workspace:FindFirstChild("MechAssemblies")
-
-	if not root then
-		return nil
-	end
-
-	local model =
-		root:FindFirstChild(mechId)
-
-	if not model then
-		return nil
-	end
-
-	local instance =
-		model:FindFirstChild(
-			componentId,
-			true
-		)
-
-	if
-		instance
-		and instance:IsA("BasePart")
-	then
-		return instance
-	end
-
-	return nil
+local function assemblyModel(mechId: string): Model?
+	local root = Workspace:FindFirstChild("MechAssemblies")
+	local model = root and root:FindFirstChild(mechId)
+	return if model and model:IsA("Model") then model else nil
 end
 
---------------------------------------------------
--- CAN FIRE
---------------------------------------------------
+function Combat:_part(mechId: string, componentId: string): BasePart?
+	local model = assemblyModel(mechId)
+	if not model then return nil end
+	local component = model:FindFirstChild(componentId)
+	if not component or not component:IsA("Model") then return nil end
+	local root = component.PrimaryPart or component:FindFirstChild("Root")
+	return if root and root:IsA("BasePart") and root:GetAttribute("ComponentRoot") == true then root else nil
+end
 
-function Combat:CanFire(
-	userId: number,
-	mechId: string,
-	weaponId: string
-): (boolean, string?)
-
-	--------------------------------------------------
-	-- MECH OWNERSHIP
-	--------------------------------------------------
-
-	local mech: any =
-		self._mechs:Get(mechId)
-
-	if
-		not mech
-		or mech.Owner ~= userId
-	then
-		return false, "NotAuthorized"
-	end
-
-	--------------------------------------------------
-	-- WEAPON COMPONENT
-	--------------------------------------------------
-
-	local components: any =
-		mech.Components
-
-	if type(components) ~= "table" then
-		return false, "InvalidMech"
-	end
-
-	local weapon: any =
-		components[weaponId]
-
-	if
-		not weapon
-		or weapon.Destroyed == true
-		or weapon.Combat == nil
-	then
-		return false, "InvalidWeapon"
-	end
-
-	--------------------------------------------------
-	-- WEAPON CONFIG
-	--------------------------------------------------
-
-	local config: any =
-		Definitions.Resolve(
-			weapon.Combat
-		)
-
-	if not config then
-		return false, "InvalidWeaponConfig"
-	end
-
-	--------------------------------------------------
-	-- METADATA / STATE
-	--------------------------------------------------
-
-	local metadata: any =
-		weapon.Metadata or {}
-
-	local state =
-		metadata.WeaponState or "Ready"
-
-	if state ~= "Ready" then
-		return false, tostring(state)
-	end
-
-	if
-		metadata.Overheated == true
-		or metadata.Jammed == true
-	then
-		return false, "WeaponDisabled"
-	end
-
-	--------------------------------------------------
-	-- COOLDOWN
-	--------------------------------------------------
-
-	local fireRate =
-		math.max(
-			tonumber(config.FireRate) or 1,
-			0.01
-		)
-
-	local cooldown =
-		1 / fireRate
-
-	local lastFireMap: NumberMap =
-		self._lastFire
-
-	local lastFire =
-		lastFireMap[weaponId]
-		or -math.huge
-
-	if
-		os.clock() - lastFire
-		< cooldown
-	then
-		return false, "Cooldown"
-	end
-
-	--------------------------------------------------
-	-- POWER
-	--------------------------------------------------
-
-	local requiredPower =
-		math.max(
-			0,
-			tonumber(config.RequiredPower) or 0
-		)
-
-	if requiredPower > 0 then
-		local canConsume =
-			self._power:CanConsumePower(
-				mechId,
-				weaponId,
-				requiredPower
-			)
-
-		if not canConsume then
-			return false, "NoPower"
+function Combat:_ammoCapacity(mechId: string): number
+	local mech = self._mechs:Get(mechId)
+	if not mech then return 0 end
+	local capacity = 0
+	for _, component in pairs(mech.Components) do
+		if not component.Destroyed and component.Utility and component.Utility.Kind == "AmmoStorage" then
+			capacity += math.max(0, tonumber(component.Utility.Capacity) or 0)
 		end
 	end
+	return capacity
+end
 
-	--------------------------------------------------
-	-- AMMUNITION
-	--------------------------------------------------
-
-	local ammoUsage =
-		math.max(
-			0,
-			tonumber(config.AmmoUsage) or 0
-		)
-
-	local ammoMap: NumberMap =
-		self._ammo
-
-	local ammo =
-		ammoMap[weaponId]
-
-	if ammo == nil then
-		ammo =
-			tonumber(metadata.Ammo)
-			or math.huge
+function Combat:_ammoState(mechId: string): number
+	local current = self._ammo[mechId]
+	local capacity = self:_ammoCapacity(mechId)
+	if current == nil then
+		current = capacity
+	elseif current > capacity then
+		current = capacity
 	end
+	self._ammo[mechId] = math.max(0, current)
+	return self._ammo[mechId]
+end
 
-	if
-		ammoUsage > 0
-		and ammo < ammoUsage
-	then
-		return false, "NoAmmo"
-	end
+function Combat:CanFire(userId: number, mechId: string, weaponId: string): (boolean, string?)
+	local mech = self._mechs:Get(mechId)
+	if not mech or mech.Owner ~= userId then return false, "NotAuthorized" end
+	local weapon = mech.Components and mech.Components[weaponId]
+	if not weapon or weapon.Destroyed == true or weapon.Combat == nil then return false, "InvalidWeapon" end
+	local config = Definitions.Resolve(weapon.Combat)
+	local metadata = weapon.Metadata or {}
+	local state = metadata.WeaponState or "Ready"
+	if state ~= "Ready" then return false, tostring(state) end
+	if metadata.Overheated == true or metadata.Jammed == true then return false, "WeaponDisabled" end
 
+	local fireRate = math.max(tonumber(config.FireRate) or 1, .01)
+	if os.clock() - (self._lastFire[weaponId] or -math.huge) < 1 / fireRate then return false, "Cooldown" end
+
+	local requiredPower = math.max(0, tonumber(config.RequiredPower) or 0)
+	if requiredPower > 0 and not self._power:CanConsumePower(mechId, weaponId, requiredPower) then return false, "NoPower" end
+
+	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
+	if ammoUsage > 0 and self:_ammoState(mechId) < ammoUsage then return false, "NoAmmoStorage" end
 	return true, nil
 end
 
---------------------------------------------------
--- FIRE
---------------------------------------------------
+function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any): (boolean, string?)
+	local canFire, reason = self:CanFire(userId, mechId, weaponId)
+	if not canFire then return false, reason end
+	local weapon = self._mechs:GetComponent(mechId, weaponId)
+	if not weapon or not weapon.Combat then return false, "InvalidWeapon" end
+	local config = Definitions.Resolve(weapon.Combat)
+	local part = self:_part(mechId, weaponId)
+	if not part then return false, "NoPhysicalWeapon" end
+	local model = assemblyModel(mechId)
+	if not model then return false, "NoPhysicalWeapon" end
 
-function Combat:Fire(
-	userId: number,
-	mechId: string,
-	weaponId: string,
-	aim: any
-): (boolean, string?)
-
-	--------------------------------------------------
-	-- VALIDATE FIRE
-	--------------------------------------------------
-
-	local canFire: boolean, reason: string? =
-		self:CanFire(
-			userId,
-			mechId,
-			weaponId
-		)
-
-	if not canFire then
-		return false, reason
+	local forward = part.CFrame.LookVector
+	local direction = forward
+	if type(aim) == "table" and typeof(aim.Direction) == "Vector3" and aim.Direction.Magnitude > .9 then
+		local requested = aim.Direction.Unit
+		local maxArc = math.rad(math.clamp(tonumber(config.TurnSpeed) or 0, 0, 180))
+		if maxArc > 0 and math.acos(math.clamp(forward:Dot(requested), -1, 1)) <= maxArc then direction = requested end
 	end
+	local origin = part.Position + forward * (math.max(part.Size.Z, part.Size.X, part.Size.Y) * .5 + .2)
 
-	--------------------------------------------------
-	-- GET WEAPON
-	--------------------------------------------------
-
-	local weapon: any =
-		self._mechs:GetComponent(
-			mechId,
-			weaponId
-		)
-
-	if weapon == nil then
-		return false, "InvalidWeapon"
-	end
-
-	if weapon.Combat == nil then
-		return false, "InvalidWeapon"
-	end
-
-	local metadata: any =
-		weapon.Metadata or {}
-
-	local config: any =
-		Definitions.Resolve(
-			weapon.Combat
-		)
-
-	if config == nil then
-		return false, "InvalidWeaponConfig"
-	end
-
-	--------------------------------------------------
-	-- PHYSICAL WEAPON
-	--------------------------------------------------
-
-	local part: BasePart? =
-		self:_part(
-			mechId,
-			weaponId
-		)
-
-	if part == nil then
-		return false, "NoPhysicalWeapon"
-	end
-
-	--------------------------------------------------
-	-- AIM
-	--------------------------------------------------
-
-	local origin: Vector3 =
-		part.Position
-
-	local forward: Vector3 =
-		part.CFrame.LookVector
-
-	local direction: Vector3 =
-		forward
-
-	if type(aim) == "table" then
-		local requestedDirection: any =
-			aim.Direction
-
-		if
-			typeof(requestedDirection) == "Vector3"
-			and requestedDirection.Magnitude > 0.9
-		then
-			local requested: Vector3 =
-				requestedDirection.Unit
-
-			local turnSpeed: number =
-				tonumber(config.TurnSpeed) or 0
-
-			local maxArcDegrees: number =
-				math.clamp(
-					turnSpeed,
-					0,
-					180
-				)
-
-			local maxArc: number =
-				math.rad(maxArcDegrees)
-
-			if maxArc > 0 then
-				local dot: number =
-					math.clamp(
-						forward:Dot(requested),
-						-1,
-						1
-					)
-
-				local angle: number =
-					math.acos(dot)
-
-				if angle <= maxArc then
-					direction = requested
-				end
-			end
-		end
-	end
-
-	--------------------------------------------------
-	-- ENERGY
-	--------------------------------------------------
-
-	local energyUsage: number =
-		math.max(
-			0,
-			tonumber(config.EnergyUsage) or 0
-		)
-
+	local energyUsage = math.max(0, tonumber(config.EnergyUsage) or 0)
 	if energyUsage > 0 then
-		local suppliedResult: any =
-			self._power:RequestPower(
-				mechId,
-				weaponId,
-				energyUsage
-			)
-
-		local supplied: number =
-			tonumber(suppliedResult) or 0
-
-		if supplied < energyUsage then
-			return false, "PowerRejected"
-		end
+		local supplied = tonumber(self._power:RequestPower(mechId, weaponId, energyUsage)) or 0
+		if supplied < energyUsage then return false, "PowerRejected" end
 	end
 
-	--------------------------------------------------
-	-- RECORD FIRE TIME
-	--------------------------------------------------
+	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
+	if ammoUsage > 0 then self._ammo[mechId] = math.max(0, self:_ammoState(mechId) - ammoUsage) end
+	self._lastFire[weaponId] = os.clock()
 
-	local lastFireMap =
-		self._lastFire :: {[string]: number}
+	local heatGenerated = math.max(0, tonumber(config.HeatGenerated) or 0)
+	if heatGenerated > 0 then self._heat:AddHeat(mechId, weaponId, heatGenerated) end
 
-	lastFireMap[weaponId] =
-		os.clock()
+	local projectileSuccess = self._projectiles:Fire(origin, direction, config, {
+		MechId=mechId, WeaponId=weaponId, UserId=userId, Ignore=model,
+	})
+	if projectileSuccess == false then return false, "ProjectileRejected" end
 
-	--------------------------------------------------
-	-- AMMO
-	--------------------------------------------------
-
-	local ammoUsage: number =
-		math.max(
-			0,
-			tonumber(config.AmmoUsage) or 0
-		)
-
-	if ammoUsage > 0 then
-		local ammoMap =
-			self._ammo :: {[string]: number}
-
-		local currentAmmo: number? =
-			ammoMap[weaponId]
-
-		if currentAmmo == nil then
-			currentAmmo =
-				tonumber(metadata.Ammo) or 0
-		end
-
-		local resolvedAmmo: number = currentAmmo or 0
-
-		ammoMap[weaponId] =
-			math.max(
-				0,
-				resolvedAmmo - ammoUsage
-			)
-	end
-
-	--------------------------------------------------
-	-- HEAT
-	--------------------------------------------------
-
-	local heatGenerated: number =
-		math.max(
-			0,
-			tonumber(config.HeatGenerated) or 0
-		)
-
-	if heatGenerated > 0 then
-		self._heat:AddHeat(
-			mechId,
-			weaponId,
-			heatGenerated
-		)
-	end
-
-	--------------------------------------------------
-	-- FIRE PROJECTILE
-	--------------------------------------------------
-
-	local projectileContext: any = {
-		MechId = mechId,
-		WeaponId = weaponId,
-		UserId = userId,
-		Ignore = part.Parent,
-	}
-
-	local projectileSuccess: any =
-		self._projectiles:Fire(
-			origin,
-			direction,
-			config,
-			projectileContext
-		)
-
-	if projectileSuccess == false then
-		return false, "ProjectileRejected"
-	end
-
-	--------------------------------------------------
-	-- RECOIL
-	--------------------------------------------------
-
-	local recoil: number =
-		math.max(
-			0,
-			tonumber(config.Recoil) or 0
-		)
-
+	local recoil = math.max(0, tonumber(config.Recoil) or 0)
 	if recoil > 0 then
-		local assembly: BasePart =
-			part.AssemblyRootPart or part
-
-		if not assembly.Anchored then
-			local impulse: Vector3 =
-				-direction * recoil
-
-			assembly:ApplyImpulseAtPosition(
-				impulse,
-				origin
-			)
-		end
+		local assembly = part.AssemblyRootPart or part
+		if not assembly.Anchored then assembly:ApplyImpulseAtPosition(-direction * recoil, origin) end
 	end
-
 	return true, nil
 end
---------------------------------------------------
--- RECORD FIRE
---------------------------------------------------
 
-function Combat:RecordFire(
-	userId: number,
-	mechId: string,
-	weaponId: string
-): (boolean, string?)
-
-	return self:Fire(
-		userId,
-		mechId,
-		weaponId,
-		nil
-	)
+function Combat:RecordFire(userId: number, mechId: string, weaponId: string): (boolean, string?)
+	return self:Fire(userId, mechId, weaponId, nil)
 end
 
---------------------------------------------------
--- RELOAD
---------------------------------------------------
-
-function Combat:Reload(
-	mechId: string,
-	weaponId: string,
-	amount: number
-): boolean
-
-	-- mechId is retained because reload logic may later
-	-- need magazines/ammo storage from the mech.
-	local _ = mechId
-
-	if amount <= 0 then
-		return false
-	end
-
-	local ammoMap: NumberMap =
-		self._ammo
-
-	local currentAmmo =
-		ammoMap[weaponId] or 0
-
-	ammoMap[weaponId] =
-		currentAmmo + amount
-
+function Combat:Reload(mechId: string, _weaponId: string, amount: number): boolean
+	if amount <= 0 then return false end
+	local capacity = self:_ammoCapacity(mechId)
+	if capacity <= 0 then return false end
+	self._ammo[mechId] = math.min(capacity, self:_ammoState(mechId) + amount)
 	return true
 end
 
---------------------------------------------------
--- DEBUG WEAPON
---------------------------------------------------
-
-function Combat:DebugWeapon(
-	mechId: string,
-	weaponId: string
-): any
-
-	local weapon: any =
-		self._mechs:GetComponent(
-			mechId,
-			weaponId
-		)
-
-	if
-		not weapon
-		or weapon.Combat == nil
-	then
-		return nil
-	end
-
-	local ammoMap: NumberMap =
-		self._ammo
-
-	local lastFireMap: NumberMap =
-		self._lastFire
-
-	return {
-		Config =
-			Definitions.Resolve(
-				weapon.Combat
-			),
-
-		Ammo =
-			ammoMap[weaponId],
-
-		LastFire =
-			lastFireMap[weaponId],
-
-		Power =
-			self._power:GetPowerState(
-				mechId,
-				weaponId
-			),
-
-		Temperature =
-			self._heat:GetTemperature(
-				mechId,
-				weaponId
-			),
-	}
+function Combat:GetAmmo(mechId: string): (number, number)
+	return self:_ammoState(mechId), self:_ammoCapacity(mechId)
 end
 
---------------------------------------------------
--- RETURN
---------------------------------------------------
+function Combat:DebugWeapon(mechId: string, weaponId: string): any
+	local weapon = self._mechs:GetComponent(mechId, weaponId)
+	if not weapon or weapon.Combat == nil then return nil end
+	local ammo, capacity = self:GetAmmo(mechId)
+	return {
+		Config=Definitions.Resolve(weapon.Combat),
+		Ammo=ammo,
+		AmmoCapacity=capacity,
+		LastFire=self._lastFire[weaponId],
+		Power=self._power:GetPowerState(mechId, weaponId),
+		Temperature=self._heat:GetTemperature(mechId, weaponId),
+	}
+end
 
 return Combat
