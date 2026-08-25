@@ -1,6 +1,5 @@
 --!strict
--- Resilient composition root. The construction stack comes online first so an
--- unrelated combat/AI service cannot take the builder RemoteFunction down.
+-- Resilient composition root. Construction comes online first; optional simulation can degrade independently.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -11,17 +10,18 @@ local framework = ReplicatedStorage:WaitForChild("MechFramework")
 local remotes = framework:WaitForChild("Remotes")
 local functions = remotes:WaitForChild("Functions")
 local buildRemote = functions:WaitForChild("RequestBuildAction")
+local machineRemote = functions:WaitForChild("RequestMachineAction")
 
 assert(buildRemote:IsA("RemoteFunction"), "[MechFramework] RequestBuildAction must be a RemoteFunction")
+assert(machineRemote:IsA("RemoteFunction"), "[MechFramework] RequestMachineAction must be a RemoteFunction")
 
 framework:SetAttribute("ServerBootstrapState", "Starting")
 framework:SetAttribute("ServerBootstrapError", "")
+framework:SetAttribute("BuilderServerReady", false)
+framework:SetAttribute("MachineServerReady", false)
 
--- Never leave InvokeServer hanging during the short server-start race. BuildService
--- replaces this callback as soon as the core construction stack starts.
-buildRemote.OnServerInvoke = function()
-	return false, "ServerStarting"
-end
+buildRemote.OnServerInvoke = function() return false, "ServerStarting" end
+machineRemote.OnServerInvoke = function() return false, "MachineServerStarting" end
 
 local container = Container.new()
 local loaded: {[string]: any} = {}
@@ -47,6 +47,10 @@ local OPTIONAL_ORDER = {
 	"ProjectileService",
 	"CombatService",
 	"ControlService",
+	"PilotService",
+	"VehicleService",
+	"PropulsionService",
+	"AerodynamicsService",
 	"MatchService",
 	"AIService",
 	"NetworkService",
@@ -63,110 +67,61 @@ local function requireService(name: string, required: boolean): boolean
 	local module = services:FindFirstChild(name)
 	if not module or not module:IsA("ModuleScript") then
 		local reason = "missing ModuleScript"
-		if required then
-			error(string.format("[MechFramework] CORE REQUIRE %s: %s", name, reason))
-		end
+		if required then error(string.format("[MechFramework] CORE REQUIRE %s: %s", name, reason)) end
 		recordFailure("REQUIRE", name, reason)
 		return false
 	end
-
 	local ok, service = pcall(require, module)
 	if not ok then
-		if required then
-			error(string.format("[MechFramework] CORE REQUIRE %s: %s", name, tostring(service)))
-		end
+		if required then error(string.format("[MechFramework] CORE REQUIRE %s: %s", name, tostring(service))) end
 		recordFailure("REQUIRE", name, service)
 		return false
 	end
-
 	loaded[name] = service
 	container:Register(name, service)
 	print("[MechFramework] Registered", name)
 	return true
 end
 
--- Register every healthy service before Init so container:Get() can resolve
--- dependencies regardless of registration order. Optional failures are isolated.
-for _, name in CORE_ORDER do
-	requireService(name, true)
-end
-for _, name in OPTIONAL_ORDER do
-	requireService(name, false)
-end
+for _, name in CORE_ORDER do requireService(name, true) end
+for _, name in OPTIONAL_ORDER do requireService(name, false) end
 
 local function initService(name: string, required: boolean): boolean
 	local service = loaded[name]
-	if not service then
-		return false
-	end
-
+	if not service then return false end
 	print("[MechFramework] Init", name)
-	local ok, reason = pcall(function()
-		if service.Init then
-			service:Init(container)
-		end
-	end)
-
+	local ok, reason = pcall(function() if service.Init then service:Init(container) end end)
 	if not ok then
-		if required then
-			error(string.format("[MechFramework] CORE INIT %s: %s", name, tostring(reason)))
-		end
+		if required then error(string.format("[MechFramework] CORE INIT %s: %s", name, tostring(reason))) end
 		recordFailure("INIT", name, reason)
 		return false
 	end
-
 	initialized[name] = true
 	return true
 end
 
 local function startService(name: string, required: boolean): boolean
 	local service = loaded[name]
-	if not service or not initialized[name] then
-		return false
-	end
-
+	if not service or not initialized[name] then return false end
 	print("[MechFramework] Start", name)
-	local ok, reason = pcall(function()
-		if service.Start then
-			service:Start()
-		end
-	end)
-
+	local ok, reason = pcall(function() if service.Start then service:Start() end end)
 	if not ok then
-		if required then
-			error(string.format("[MechFramework] CORE START %s: %s", name, tostring(reason)))
-		end
+		if required then error(string.format("[MechFramework] CORE START %s: %s", name, tostring(reason))) end
 		recordFailure("START", name, reason)
 		return false
 	end
-
 	started[name] = true
 	return true
 end
 
--- Construction is the critical path. Bring it fully online before initializing
--- optional combat, match, AI, persistence and network features.
-for _, name in CORE_ORDER do
-	initService(name, true)
-end
-for _, name in CORE_ORDER do
-	startService(name, true)
-end
-
+for _, name in CORE_ORDER do initService(name, true) end
+for _, name in CORE_ORDER do startService(name, true) end
 framework:SetAttribute("BuilderServerReady", true)
 print("[MechFramework] Core builder stack ready")
 
--- Optional systems are best-effort individually. One broken system is reported
--- clearly and its dependants may also degrade, but the builder stays available.
-for _, name in OPTIONAL_ORDER do
-	initService(name, false)
-end
-for _, name in OPTIONAL_ORDER do
-	startService(name, false)
-end
+for _, name in OPTIONAL_ORDER do initService(name, false) end
+for _, name in OPTIONAL_ORDER do startService(name, false) end
 
-if framework:GetAttribute("ServerBootstrapState") ~= "Degraded" then
-	framework:SetAttribute("ServerBootstrapState", "Ready")
-end
-
+if started.PilotService then framework:SetAttribute("MachineServerReady", true) end
+if framework:GetAttribute("ServerBootstrapState") ~= "Degraded" then framework:SetAttribute("ServerBootstrapState", "Ready") end
 print("[MechFramework] Startup complete", framework:GetAttribute("ServerBootstrapState"))
