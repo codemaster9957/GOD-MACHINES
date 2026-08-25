@@ -8,7 +8,7 @@ local Definitions = require(game.ReplicatedStorage.MechFramework.Shared.WeaponDe
 local AI: any = { _agents = {}, _accumulator = 0 }
 
 local MOVEMENT_ACTIONS = {
-	"ThrottleForward","ThrottleReverse","SteerLeft","SteerRight",
+	"ThrottleForward","ThrottleReverse","SteerLeft","SteerRight","StrafeLeft","StrafeRight",
 	"VerticalUp","VerticalDown","PitchUp","PitchDown","YawLeft","YawRight","RollLeft","RollRight","Brake",
 }
 
@@ -43,9 +43,7 @@ function AI:Start()
 	if ended then
 		ended:Connect(function(payload: any)
 			local match = self._matches:Get(payload.MatchId)
-			if match then
-				for mechId in pairs(match.Mechs or {}) do if self._agents[mechId] then self:Unregister(mechId) end end
-			end
+			if match then for mechId in pairs(match.Mechs or {}) do if self._agents[mechId] then self:Unregister(mechId) end end end
 		end)
 	end
 	RunService.Heartbeat:Connect(function(dt: number)
@@ -94,10 +92,8 @@ function AI:_weapons(mech: any): ({any}, number)
 	for id, component in pairs(mech.Components) do
 		if component.Combat and not component.Destroyed and not (component.Metadata and (component.Metadata.Detached or component.Metadata.Jammed)) then
 			local config = Definitions.Resolve(component.Combat)
-			if config then
-				table.insert(weapons, {Id=id, Config=config})
-				preferred = math.max(preferred, (tonumber(config.Range) or 200) * .65)
-			end
+			table.insert(weapons, {Id=id, Config=config})
+			preferred = math.max(preferred, (tonumber(config.Range) or 200) * .65)
 		end
 	end
 	return weapons, preferred
@@ -129,17 +125,19 @@ function AI:_moveIntent(agent: any, worldDirection: Vector3, moving: boolean, re
 
 	local useReverse = moving and forward < -0.35
 	local useForward = moving and not useReverse
-	local steerRight = right > .12
-	local steerLeft = right < -.12
+	local rightIntent = right > .12
+	local leftIntent = right < -.12
 
 	self._control:SetServerAction(agent.MechId, "ThrottleForward", useForward)
 	self._control:SetServerAction(agent.MechId, "ThrottleReverse", useReverse)
-	self._control:SetServerAction(agent.MechId, "SteerRight", steerRight)
-	self._control:SetServerAction(agent.MechId, "SteerLeft", steerLeft)
-	self._control:SetServerAction(agent.MechId, "YawRight", steerRight)
-	self._control:SetServerAction(agent.MechId, "YawLeft", steerLeft)
-	self._control:SetServerAction(agent.MechId, "RollRight", steerRight)
-	self._control:SetServerAction(agent.MechId, "RollLeft", steerLeft)
+	self._control:SetServerAction(agent.MechId, "SteerRight", rightIntent)
+	self._control:SetServerAction(agent.MechId, "SteerLeft", leftIntent)
+	self._control:SetServerAction(agent.MechId, "StrafeRight", moving and rightIntent)
+	self._control:SetServerAction(agent.MechId, "StrafeLeft", moving and leftIntent)
+	self._control:SetServerAction(agent.MechId, "YawRight", rightIntent)
+	self._control:SetServerAction(agent.MechId, "YawLeft", leftIntent)
+	self._control:SetServerAction(agent.MechId, "RollRight", rightIntent)
+	self._control:SetServerAction(agent.MechId, "RollLeft", leftIntent)
 	self._control:SetServerAction(agent.MechId, "VerticalUp", moving and vertical > .28)
 	self._control:SetServerAction(agent.MechId, "VerticalDown", moving and vertical < -.28)
 	self._control:SetServerAction(agent.MechId, "PitchUp", vertical > .12)
@@ -168,39 +166,27 @@ function AI:_think(agent: any)
 	local health = self:_healthRatio(mech)
 	local retreat = health < (tonumber(agent.Profile.RetreatHealth) or .3) or #weapons == 0
 
-	if retreat then
-		agent.State="Retreat"
-		self:_moveIntent(agent, -offset.Unit, true, true)
-	elseif distance > preferred then
-		agent.State="CloseRange"
-		self:_moveIntent(agent, offset.Unit, true, false)
-	elseif distance < preferred*.35 then
-		agent.State="CreateDistance"
-		self:_moveIntent(agent, -offset.Unit, true, false)
-	else
-		agent.State="Engage"
-		self:_moveIntent(agent, offset.Unit, false, false)
-	end
+	if retreat then agent.State="Retreat"; self:_moveIntent(agent, -offset.Unit, true, true)
+	elseif distance > preferred then agent.State="CloseRange"; self:_moveIntent(agent, offset.Unit, true, false)
+	elseif distance < preferred*.35 then agent.State="CreateDistance"; self:_moveIntent(agent, -offset.Unit, true, false)
+	else agent.State="Engage"; self:_moveIntent(agent, offset.Unit, false, false) end
 
 	for _, weapon in ipairs(weapons) do
 		local range = tonumber(weapon.Config.Range) or 500
 		if distance <= range then self._combat:Fire(mech.Owner,agent.MechId,weapon.Id,{Direction=offset.Unit}) end
 	end
-	local model = modelFor(agent.MechId)
-	if model then
-		model:SetAttribute("AITarget",agent.Target)
-		model:SetAttribute("AIState",agent.State)
-		model:SetAttribute("SystemHealth",health)
+	local liveModel = modelFor(agent.MechId)
+	if liveModel then
+		liveModel:SetAttribute("AITarget",agent.Target)
+		liveModel:SetAttribute("AIState",agent.State)
+		liveModel:SetAttribute("SystemHealth",health)
 	end
 end
 
 function AI:Step(_dt: number)
 	local ids = {}
 	for mechId in pairs(self._agents) do table.insert(ids, mechId) end
-	for _, mechId in ipairs(ids) do
-		local agent = self._agents[mechId]
-		if agent then self:_think(agent) end
-	end
+	for _, mechId in ipairs(ids) do local agent=self._agents[mechId]; if agent then self:_think(agent) end end
 end
 
 return AI
