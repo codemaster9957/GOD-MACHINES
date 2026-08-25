@@ -94,11 +94,21 @@ local function machineInvoke(request, timeoutSeconds)
 	return invokeRemote(machineRemote, "MachineServerReady", request, timeoutSeconds)
 end
 
-local function setActiveMech(value)
-	mechId = if type(value) == "string" and value ~= "" then value else nil
-	player:SetAttribute("ActiveMechId", mechId)
-	nodes:SetMech(mechId)
-	if not mechId then ui:SetEngineeringSummary(nil) end
+local function normalizeMechId(value)
+	return if type(value) == "string" and value ~= "" then value else nil
+end
+
+local function setActiveMech(value, fromAttribute)
+	local normalized = normalizeMechId(value)
+	mechId = normalized
+	if fromAttribute ~= true and player:GetAttribute("ActiveMechId") ~= normalized then
+		player:SetAttribute("ActiveMechId", normalized)
+	end
+	nodes:SetMech(normalized)
+	if not normalized then
+		ui:SetEngineeringSummary(nil)
+		currentBindings = {}
+	end
 end
 
 local function componentFromTarget()
@@ -118,6 +128,7 @@ local function selectPart(partType)
 	selectedPart = partType
 	ui:SetSelectedPart(partType)
 	ui:SetInspector(partType, definition)
+	ui:SetMirrorState(false)
 	status("SELECTED " .. tostring(definition.DisplayName or partType), "good", 0.35)
 	return true
 end
@@ -153,6 +164,10 @@ local function enterEditMode()
 end
 
 local function testMachine()
+	if framework:GetAttribute("MachineServerReady") ~= true then
+		status(startupReason("MACHINE SYSTEMS NOT READY"), "bad", 1.3)
+		return
+	end
 	if not mechId then status("BUILD A MACHINE FIRST", "bad", 1.0); return end
 	if machineMode == "Test" then enterEditMode(); return end
 	local success, result = machineInvoke({ Action="SetMode", MechId=mechId, Mode="Test" }, 8)
@@ -160,7 +175,8 @@ local function testMachine()
 	machineMode = "Test"
 	ui:SetMode("Test")
 	setBuildVisible(false)
-	status("TEST MODE — SIT IN A PILOT SEAT", "blue", 1.2)
+	local remote = type(result)=="table" and result.RemoteControl == true
+	status(if remote then "TEST MODE — REMOTE CONTROL ACTIVE" else "TEST MODE — SIT IN A PILOT SEAT", "blue", 1.2)
 end
 
 local function toggleBuildMode()
@@ -185,7 +201,8 @@ local function placePart()
 	end
 	local success, result = buildInvoke({
 		Action="Place", MechId=mechId, PartType=selectedPart, Transform=data.Transform,
-		TargetComponentId=data.TargetComponentId, TargetNode=data.TargetNode, SourceNode=data.SourceNode, Rotation=data.Rotation,
+		TargetComponentId=data.TargetComponentId, TargetNode=data.TargetNode, SourceNode=data.SourceNode,
+		Rotation=data.Rotation, MirrorX=data.MirrorX == true,
 	}, 8)
 	if success then
 		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
@@ -201,7 +218,16 @@ local function removePart()
 	local targetMech, componentId = componentFromTarget()
 	if targetMech ~= mechId or not componentId then status("AIM AT ONE OF YOUR COMPONENTS", "bad", .8); return end
 	local success, result = buildInvoke({ Action="Remove", MechId=mechId, ComponentId=componentId }, 8)
-	if success then status("COMPONENT REMOVED", "good", .55) else status(result or "REMOVE REJECTED", "bad", 1) end
+	if success then
+		if type(result)=="table" and result.Empty==true then
+			setActiveMech(nil)
+			status("MACHINE CLEARED — PLACE A NEW FOUNDATION", "good", .85)
+		else
+			status("COMPONENT REMOVED", "good", .55)
+		end
+	else
+		status(result or "REMOVE REJECTED", "bad", 1)
+	end
 end
 
 local function duplicateTarget()
@@ -223,19 +249,30 @@ end
 local function applyHistory(action)
 	local success, result = buildInvoke({ Action=action }, 8)
 	if success then
-		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
+		if type(result)=="table" then
+			if result.Empty==true then setActiveMech(nil)
+			elseif type(result.MechId)=="string" then setActiveMech(result.MechId) end
+		end
 		status(action, "good", .45)
-	else status(result or "NOTHING TO APPLY", "bad", .65) end
+	else
+		status(result or "NOTHING TO APPLY", "bad", .65)
+	end
 end
 
 local function rotate()
 	if not buildMode then return end
-	preview:Rotate(); preview:Update(mechId); status("ROTATED 90°", nil, .2)
+	preview:Rotate()
+	preview:Update(mechId)
+	status("ROTATED 90°", nil, .2)
 end
 
 local function mirror()
-	if not buildMode then return end
-	preview:Mirror(); preview:Update(mechId); status("MIRRORED ORIENTATION", nil, .25)
+	if not buildMode then return preview.MirrorX == true end
+	local mirrored = preview:Mirror()
+	preview:Update(mechId)
+	ui:SetMirrorState(mirrored)
+	status(if mirrored then "MIRROR ENABLED" else "MIRROR DISABLED", nil, .25)
+	return mirrored
 end
 
 local function selectSlot(slot)
@@ -243,22 +280,55 @@ local function selectSlot(slot)
 	if partId then selectPart(partId) end
 end
 
+local function refreshBlueprints(silent)
+	if framework:GetAttribute("MachineServerReady") ~= true then
+		if not silent then status(startupReason("BLUEPRINT SYSTEM NOT READY"), "bad", 1) end
+		return false
+	end
+	local success, result = machineInvoke({ Action="ListBlueprints" }, 6)
+	if success and type(result)=="table" then
+		ui:SetBlueprints(result)
+		return true
+	end
+	if not silent then status(result or "BLUEPRINT REFRESH FAILED", "bad", 1) end
+	return false
+end
+
 local function saveBlueprint(name)
 	if not mechId then status("NO ACTIVE MACHINE", "bad", .8); return end
 	name = tostring(name or ""):match("^%s*(.-)%s*$")
 	if name == "" then status("ENTER A BLUEPRINT NAME", "bad", .8); return end
 	local success, result = machineInvoke({ Action="SaveBlueprint", MechId=mechId, Name=name }, 8)
-	if success then status("BLUEPRINT SAVED: " .. name, "good", 1) else status(result or "BLUEPRINT SAVE FAILED", "bad", 1.2) end
+	if success then
+		status("BLUEPRINT SAVED: " .. name, "good", 1)
+		refreshBlueprints(true)
+	else
+		status(result or "BLUEPRINT SAVE FAILED", "bad", 1.2)
+	end
 end
 
 local function loadBlueprint(name)
 	name = tostring(name or ""):match("^%s*(.-)%s*$")
-	if name == "" then status("ENTER A BLUEPRINT NAME", "bad", .8); return end
+	if name == "" then status("SELECT OR ENTER A BLUEPRINT NAME", "bad", .8); return end
 	local success, result = machineInvoke({ Action="LoadBlueprint", Name=name }, 8)
 	if not success then status(result or "BLUEPRINT LOAD FAILED", "bad", 1.2); return end
 	if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
-	machineMode = "Edit"; ui:SetMode("Edit"); setBuildVisible(true)
+	machineMode = "Edit"
+	ui:SetMode("Edit")
+	setBuildVisible(true)
 	status("BLUEPRINT DEPLOYED: " .. name, "good", 1)
+end
+
+local function deleteBlueprint(name)
+	name = tostring(name or ""):match("^%s*(.-)%s*$")
+	if name == "" then status("SELECT A BLUEPRINT TO DELETE", "bad", .8); return end
+	local success, result = machineInvoke({ Action="DeleteBlueprint", Name=name }, 6)
+	if success then
+		status("BLUEPRINT DELETED: " .. name, "good", .9)
+		refreshBlueprints(true)
+	else
+		status(result or "BLUEPRINT DELETE FAILED", "bad", 1)
+	end
 end
 
 local function refreshBindings()
@@ -271,8 +341,12 @@ end
 local function autoBindings()
 	if not mechId then status("NO ACTIVE MACHINE", "bad", .8); return end
 	local success, result = machineInvoke({ Action="AutoBindings", MechId=mechId }, 8)
-	if success and type(result)=="table" then currentBindings=result; status("AUTOMATIC CONTROLS GENERATED", "good", .9)
-	else status(result or "AUTO BIND FAILED", "bad", 1) end
+	if success and type(result)=="table" then
+		currentBindings=result
+		status("AUTOMATIC CONTROLS GENERATED", "good", .9)
+	else
+		status(result or "AUTO BIND FAILED", "bad", 1)
+	end
 end
 
 local function bindTarget(action)
@@ -291,12 +365,19 @@ end
 local function refreshSummary()
 	if summaryBusy or not buildMode or not mechId then return end
 	if os.clock() - lastSummaryAt < .5 then return end
-	lastSummaryAt = os.clock(); summaryBusy = true
+	lastSummaryAt = os.clock()
+	summaryBusy = true
 	task.spawn(function()
 		local success, result = buildInvoke({ Action="Summary", MechId=mechId }, 4)
 		if success then ui:SetEngineeringSummary(result) end
 		summaryBusy = false
 	end)
+end
+
+local function updateMachineReady()
+	local ready = framework:GetAttribute("MachineServerReady") == true
+	ui:SetMachineReady(ready)
+	if ready then refreshBlueprints(true) end
 end
 
 ui.Callbacks.SelectPart = selectPart
@@ -310,10 +391,15 @@ ui.Callbacks.Undo = function() applyHistory("Undo") end
 ui.Callbacks.Redo = function() applyHistory("Redo") end
 ui.Callbacks.SaveBlueprint = saveBlueprint
 ui.Callbacks.LoadBlueprint = loadBlueprint
+ui.Callbacks.RefreshBlueprints = function() refreshBlueprints(false) end
+ui.Callbacks.DeleteBlueprint = deleteBlueprint
 ui.Callbacks.BindTarget = bindTarget
 ui.Callbacks.AutoBindings = autoBindings
 ui:SetCatalog(catalog, categories)
 ui:SetMode("Edit")
+ui:SetMachineReady(false)
+ui:SetMirrorState(false)
+ui:SetBlueprints({})
 
 input = BuildInput.new(UserInputService, {
 	Toggle=toggleBuildMode, Rotate=rotate, Mirror=mirror, Place=placePart, Remove=removePart,
@@ -328,13 +414,26 @@ nodes:SetEnabled(false)
 nodes:SetMech(mechId)
 
 player:GetAttributeChangedSignal("ActiveMechId"):Connect(function()
-	local value = player:GetAttribute("ActiveMechId")
-	if type(value)=="string" and value~="" and value~=mechId then setActiveMech(value) end
+	local value = normalizeMechId(player:GetAttribute("ActiveMechId"))
+	if value ~= mechId then setActiveMech(value, true) end
 end)
+
+framework:GetAttributeChangedSignal("MachineServerReady"):Connect(updateMachineReady)
 
 task.spawn(function()
 	local ready, reason = waitForReady("BuilderServerReady", 10)
-	if ready then selectPart(selectedPart) else warn("[GOD MACHINES] Builder unavailable:", reason); status(reason or "SERVER NOT READY", "bad", 2) end
+	if ready then
+		selectPart(selectedPart)
+	else
+		warn("[GOD MACHINES] Builder unavailable:", reason)
+		status(reason or "SERVER NOT READY", "bad", 2)
+	end
+end)
+
+task.spawn(function()
+	local ready = waitForReady("MachineServerReady", 12)
+	updateMachineReady()
+	if ready then refreshBlueprints(true) end
 end)
 
 local renderConnection = RunService.RenderStepped:Connect(function()
@@ -357,7 +456,9 @@ end)
 script.Destroying:Connect(function()
 	player:SetAttribute("BuildMode", false)
 	if input then input:Destroy() end
-	preview:Destroy(); nodes:Destroy(); ui:Destroy()
+	preview:Destroy()
+	nodes:Destroy()
+	ui:Destroy()
 	if renderConnection then renderConnection:Disconnect() end
 end)
 
