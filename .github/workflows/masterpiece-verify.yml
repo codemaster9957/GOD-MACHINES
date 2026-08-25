@@ -29,6 +29,9 @@ jobs:
       - name: Verify GOD MACHINES architecture
         run: python scripts/verify_masterpiece.py
 
+      - name: Verify Phase 2 architecture
+        run: python scripts/verify_phase2.py
+
   luau-syntax:
     name: Compile every Luau source
     runs-on: ubuntu-latest
