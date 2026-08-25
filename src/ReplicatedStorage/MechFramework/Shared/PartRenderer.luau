@@ -1,13 +1,12 @@
 --!strict
 -- Deterministic procedural renderer shared by runtime machines and client previews.
--- Spinner roles are assembled around one motorized pivot so multi-piece wheels, fans and rotors move as a unit.
+-- Spinner roles form motorized rotor assemblies; MirrorX reflects geometry and build nodes from shared BuildMath.
 
+local BuildMath = require(script.Parent:WaitForChild("BuildMath"))
 local Renderer = {}
 
 local PREVIEW_COLORS = {
-	FREE = Color3.fromRGB(255, 184, 55),
-	SNAP = Color3.fromRGB(65, 255, 130),
-	INVALID = Color3.fromRGB(255, 65, 65),
+	FREE=Color3.fromRGB(255,184,55), SNAP=Color3.fromRGB(65,255,130), INVALID=Color3.fromRGB(255,65,65),
 }
 
 local function safeMaterial(value: any, fallback: Enum.Material): Enum.Material
@@ -52,8 +51,6 @@ end
 
 local function resolvedRole(definition: any, item: any): string
 	if type(item.Role)=="string" and item.Role~="" then return item.Role end
-	-- Early propeller recipes predate explicit roles on generated blade geometry. Treat blade/fan
-	-- geometry as part of the propeller rotor rather than leaving the blades welded to the chassis.
 	local propulsion=definition.Propulsion
 	if propulsion and (propulsion.Kind=="Propeller" or propulsion.Kind=="LiftFan") then
 		local name=tostring(item.Name or "")
@@ -64,10 +61,11 @@ end
 
 local function weld(part0: BasePart, part1: BasePart, parent: Instance, name: string)
 	local joint=Instance.new("WeldConstraint")
-	joint.Name=name
-	joint.Part0=part0
-	joint.Part1=part1
-	joint.Parent=parent
+	joint.Name=name; joint.Part0=part0; joint.Part1=part1; joint.Parent=parent
+end
+
+local function localTransform(value: CFrame, mirrorX: boolean): CFrame
+	return if mirrorX then BuildMath.MirrorX(value) else value
 end
 
 function Renderer.Render(definition: any, options: any?): (Model, BasePart)
@@ -76,11 +74,13 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	local mode=if options.Mode=="Preview" then "Preview" else "Runtime"
 	local transform=if typeof(options.CFrame)=="CFrame" then options.CFrame else CFrame.identity
 	local paint=options.Paint
+	local mirrorX=options.MirrorX==true
 
 	local model=Instance.new("Model")
 	model.Name=tostring(options.Name or definition.Id or "Component")
 	model:SetAttribute("PartType",tostring(definition.Id or options.PartType or "Unknown"))
 	model:SetAttribute("RenderMode",mode)
+	model:SetAttribute("MirrorX",mirrorX)
 	applyIdentity(model,options.Attributes)
 
 	local root=Instance.new("Part")
@@ -91,23 +91,21 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	root.Material=Enum.Material.SmoothPlastic
 	root.CastShadow=false
 	root.Anchored=mode=="Preview" or options.Anchored==true
-	-- Pilot modules need an accessible seat. The invisible root remains the physical mass/root,
-	-- but must not form an impenetrable box around the avatar.
 	root.CanCollide=mode=="Runtime" and definition.Pilot==nil
 	root.CanTouch=mode=="Runtime"
 	root.CanQuery=mode=="Runtime"
 	root.Massless=mode=="Preview"
 	root:SetAttribute("ComponentRoot",true)
 	root:SetAttribute("PartType",tostring(definition.Id or options.PartType or "Unknown"))
+	root:SetAttribute("MirrorX",mirrorX)
 	applyIdentity(root,options.Attributes)
 	root.Parent=model
 	model.PrimaryPart=root
 
-	for _,node in ipairs(definition.AttachmentNodes or {}) do
+	for _,node in ipairs(BuildMath.AttachmentNodes(definition,mirrorX)) do
 		if type(node)=="table" and type(node.Name)=="string" and typeof(node.Transform)=="CFrame" then
 			local attachment=Instance.new("Attachment")
-			attachment.Name=node.Name
-			attachment.CFrame=node.Transform
+			attachment.Name=node.Name; attachment.CFrame=node.Transform
 			attachment:SetAttribute("BuildNode",true)
 			attachment:SetAttribute("NodeType",tostring(node.Type or ""))
 			local compatibility={}
@@ -120,15 +118,15 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	end
 
 	local visuals=Instance.new("Folder")
-	visuals.Name="Visuals"
-	visuals.Parent=model
+	visuals.Name="Visuals"; visuals.Parent=model
 	local spinnerGroups: {[string]: {any}} = {}
 
 	for _,item in ipairs(definition.Geometry or {}) do
 		local visual=makeVisual(tostring(item.Kind or "Block"))
+		local itemLocal=localTransform(item.CFrame,mirrorX)
 		visual.Name=tostring(item.Name or "Visual")
 		visual.Size=item.Size
-		visual.CFrame=transform*item.CFrame
+		visual.CFrame=transform*itemLocal
 		local region=tostring(item.Region or "Primary")
 		local role=resolvedRole(definition,item)
 		visual.Color=regionColor(definition,paint,region)
@@ -147,6 +145,7 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 		visual:SetAttribute("PaintRegion",region)
 		visual:SetAttribute("BaseColor",visual.Color)
 		visual:SetAttribute("Role",role)
+		visual:SetAttribute("MirrorX",mirrorX)
 		applyIdentity(visual,options.Attributes)
 		configureVehicleSeat(visual)
 		visual.Parent=visuals
@@ -154,7 +153,7 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 		if mode=="Runtime" then
 			if role~="" and string.find(role,"Spinner") then
 				spinnerGroups[role]=spinnerGroups[role] or {}
-				table.insert(spinnerGroups[role],{Visual=visual,Item=item})
+				table.insert(spinnerGroups[role],{Visual=visual,Item=item,LocalCFrame=itemLocal})
 			else
 				weld(root,visual,root,"VisualWeld_"..visual.Name)
 			end
@@ -166,37 +165,21 @@ function Renderer.Render(definition: any, options: any?): (Model, BasePart)
 	if mode=="Runtime" then
 		for role,records in pairs(spinnerGroups) do
 			if #records==0 then continue end
-			-- Prefer the first hub/rotor/flywheel as the shaft pivot; otherwise the first tagged visual.
 			local pivotRecord=records[1]
 			for _,record in ipairs(records) do
 				local name=tostring(record.Item.Name or "")
 				if string.find(name,"Hub") or string.find(name,"Rotor") or string.find(name,"Flywheel") or string.find(name,"Core") then pivotRecord=record; break end
 			end
-			local pivotLocal=pivotRecord.Item.CFrame
+			local pivotLocal=pivotRecord.LocalCFrame
 			local pivot=Instance.new("Part")
-			pivot.Name=role.."Pivot"
-			pivot.Size=Vector3.new(.12,.12,.12)
-			pivot.CFrame=transform*pivotLocal
-			pivot.Transparency=1
-			pivot.CastShadow=false
-			pivot.CanCollide=false
-			pivot.CanQuery=false
-			pivot.CanTouch=false
-			pivot.Massless=true
-			pivot.Anchored=false
-			pivot:SetAttribute("SpinnerPivot",true)
-			pivot:SetAttribute("Role",role)
-			pivot.Parent=visuals
+			pivot.Name=role.."Pivot"; pivot.Size=Vector3.new(.12,.12,.12); pivot.CFrame=transform*pivotLocal
+			pivot.Transparency=1; pivot.CastShadow=false; pivot.CanCollide=false; pivot.CanQuery=false; pivot.CanTouch=false
+			pivot.Massless=true; pivot.Anchored=false
+			pivot:SetAttribute("SpinnerPivot",true); pivot:SetAttribute("Role",role); pivot.Parent=visuals
 
 			local motor=Instance.new("Motor6D")
-			motor.Name=role.."Motor"
-			motor.Part0=root
-			motor.Part1=pivot
-			motor.C0=pivotLocal
-			motor.C1=CFrame.identity
-			motor:SetAttribute("Role",role)
-			motor.Parent=root
-
+			motor.Name=role.."Motor"; motor.Part0=root; motor.Part1=pivot; motor.C0=pivotLocal; motor.C1=CFrame.identity
+			motor:SetAttribute("Role",role); motor.Parent=root
 			for _,record in ipairs(records) do weld(pivot,record.Visual,pivot,"RotorWeld_"..record.Visual.Name) end
 		end
 	end
@@ -210,8 +193,7 @@ function Renderer.ApplyPaint(model: Model, definition: any, paint: any)
 		if descendant:IsA("BasePart") and descendant:GetAttribute("GMVisual")==true then
 			local region=tostring(descendant:GetAttribute("PaintRegion") or "Primary")
 			local color=regionColor(definition,paint,region)
-			descendant.Color=color
-			descendant:SetAttribute("BaseColor",color)
+			descendant.Color=color; descendant:SetAttribute("BaseColor",color)
 			if type(paint)=="table" and paint.Material~=nil and region~="Glass" then descendant.Material=safeMaterial(paint.Material,descendant.Material) end
 		end
 	end
