@@ -91,14 +91,20 @@ function BuildPreview:Rotate()
 	self.Turns=(self.Turns+1)%4
 end
 
-function BuildPreview:Mirror()
-	self.MirrorX=not self.MirrorX
+function BuildPreview:SetMirror(mirrored)
+	local nextValue=mirrored==true
+	if self.MirrorX==nextValue then return self.MirrorX end
+	self.MirrorX=nextValue
 	if self.Enabled and self.Definition then
 		self:_createGhost()
 		self:_moveGhost(self.PreviewCFrame)
 		self:_setVisualState(self.LastState)
 	end
 	return self.MirrorX
+end
+
+function BuildPreview:Mirror()
+	return self:SetMirror(not self.MirrorX)
 end
 
 function BuildPreview:_targetNodeData(attachment)
