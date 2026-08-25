@@ -9,7 +9,7 @@ local function guid(): string return HttpService:GenerateGUID(false) end
 local function copy(value: any): any
 	if type(value) ~= "table" then return value end
 	local out: {[any]: any} = {}
-	for key, item in value do out[key] = copy(item) end
+	for key, item in pairs(value) do out[key] = copy(item) end
 	return out
 end
 
@@ -36,11 +36,11 @@ function MechService:_pruneEmptyBuildOrigins(ownerId: number)
 	local owned = self._ownerIndex[ownerId]
 	if not owned then return end
 	local remove = {}
-	for mechId in owned do
+	for mechId in pairs(owned) do
 		local mech = self._mechs[mechId]
 		if mech and next(mech.Components) == nil and mech.Metadata and mech.Metadata.BuildOrigin == true then table.insert(remove, mechId) end
 	end
-	for _, mechId in remove do self:Destroy(mechId) end
+	for _, mechId in ipairs(remove) do self:Destroy(mechId) end
 end
 
 function MechService:Create(ownerId: number, metadata: {[string]: any}?): string
@@ -48,8 +48,8 @@ function MechService:Create(ownerId: number, metadata: {[string]: any}?): string
 	if meta.BuildOrigin == true then self:_pruneEmptyBuildOrigins(ownerId) end
 	local id = guid()
 	self._mechs[id] = {
-		Id = id, Owner = ownerId, Components = {}, Connections = {}, Adjacency = {}, Revision = 0,
-		CreatedAt = os.time(), LastActiveAt = os.clock(), SimulationTier = "Active", Metadata = meta,
+		Id=id, Owner=ownerId, Components={}, Connections={}, Adjacency={}, Revision=0,
+		CreatedAt=os.time(), LastActiveAt=os.clock(), SimulationTier="Active", Metadata=meta,
 	}
 	self._ownerIndex[ownerId] = self._ownerIndex[ownerId] or {}
 	self._ownerIndex[ownerId][id] = true
@@ -61,15 +61,14 @@ function MechService:IsOwner(userId: number, mechId: string): boolean
 	local mech = self._mechs[mechId]
 	return mech ~= nil and mech.Owner == userId
 end
-
 function MechService:GetOwned(userId: number): {string}
 	local out = {}
-	for mechId in self._ownerIndex[userId] or {} do table.insert(out, mechId) end
+	for mechId in pairs(self._ownerIndex[userId] or {}) do table.insert(out, mechId) end
 	table.sort(out)
 	return out
 end
 
-function MechService:AddComponent(mechId: string, ownerId: number, partType: string, localTransform: CFrame, metadata: {[string]: any}?): (boolean, string)
+function MechService:AddComponent(mechId: string, ownerId: number, partType: string, localTransform: CFrame, suppliedMetadata: {[string]: any}?): (boolean, string)
 	local mech = self._mechs[mechId]
 	if not mech or mech.Owner ~= ownerId then return false, "NotAuthorized" end
 	if typeof(localTransform) ~= "CFrame" then return false, "InvalidTransform" end
@@ -78,34 +77,23 @@ function MechService:AddComponent(mechId: string, ownerId: number, partType: str
 
 	local canonical = definition.Id
 	local id = guid()
-	local componentMetadata = copy(metadata or {})
+	local componentMetadata = copy(suppliedMetadata or {})
 	componentMetadata.Paint = copy(componentMetadata.Paint or definition.PaintDefaults or {})
 	componentMetadata.ControlState = copy(componentMetadata.ControlState or {})
-	componentMetadata.PowerFraction = tonumber(componentMetadata.PowerFraction) or 1
+	local configuredDemand = definition.Power and math.max(0, tonumber(definition.Power.Demand) or 0) or 0
+	local defaultPowerFraction = if configuredDemand > 0 then 0 else 1
+	componentMetadata.PowerFraction = math.clamp(tonumber(componentMetadata.PowerFraction) or defaultPowerFraction, 0, 1)
+	componentMetadata.PowerState = componentMetadata.PowerState or (if configuredDemand > 0 then "Pending" else "Online")
+	componentMetadata.PropulsionFraction = math.clamp(tonumber(componentMetadata.PropulsionFraction) or 0, 0, 1)
+	componentMetadata.Operational = componentMetadata.Operational ~= false
 
 	mech.Components[id] = {
-		Id = id,
-		PartType = canonical,
-		Mass = definition.Mass,
-		Health = definition.MaxHealth,
-		MaxHealth = definition.MaxHealth,
-		Owner = ownerId,
-		Connections = {},
-		LocalTransform = localTransform,
-		PhysicalProperties = copy(definition.PhysicalProperties or {}),
-		Power = copy(definition.Power),
-		Heat = copy(definition.Heat),
-		Fuel = copy(definition.Fuel),
-		Mobility = copy(definition.Mobility),
-		Propulsion = copy(definition.Propulsion),
-		Aerodynamics = copy(definition.Aerodynamics),
-		Pilot = copy(definition.Pilot),
-		Utility = copy(definition.Utility),
-		Controls = copy(definition.Controls),
-		Combat = copy(definition.Combat),
-		Destroyed = false,
-		DamageState = "Operational",
-		Metadata = componentMetadata,
+		Id=id, PartType=canonical, Mass=definition.Mass, Health=definition.MaxHealth, MaxHealth=definition.MaxHealth,
+		Owner=ownerId, Connections={}, LocalTransform=localTransform,
+		PhysicalProperties=copy(definition.PhysicalProperties or {}), Power=copy(definition.Power), Heat=copy(definition.Heat), Fuel=copy(definition.Fuel),
+		Mobility=copy(definition.Mobility), Propulsion=copy(definition.Propulsion), Aerodynamics=copy(definition.Aerodynamics), Pilot=copy(definition.Pilot),
+		Utility=copy(definition.Utility), Controls=copy(definition.Controls), Combat=copy(definition.Combat),
+		Destroyed=false, DamageState="Operational", Metadata=componentMetadata,
 	}
 	mech.Adjacency[id] = {}
 	mech.Revision += 1
@@ -131,12 +119,12 @@ end
 
 function MechService:DebugStats(): {[string]: number}
 	local mechs, components, connections = 0, 0, 0
-	for _, mech in self._mechs do
+	for _, mech in pairs(self._mechs) do
 		mechs += 1
-		for _ in mech.Components do components += 1 end
-		for _ in mech.Connections do connections += 1 end
+		for _ in pairs(mech.Components) do components += 1 end
+		for _ in pairs(mech.Connections) do connections += 1 end
 	end
-	return { Mechs = mechs, Components = components, Connections = connections }
+	return { Mechs=mechs, Components=components, Connections=connections }
 end
 
 return MechService
