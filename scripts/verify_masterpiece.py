@@ -3,7 +3,8 @@
 
 This deliberately avoids Roblox runtime assumptions. It catches structural regressions,
 stale three-part architecture, remote ownership conflicts, catalog drift, profile/save
-wiring mistakes, and client/server API mismatches before a Studio smoke test.
+wiring mistakes, client/server API mismatches, and Workshop V3 presentation regressions
+before a Studio smoke test.
 """
 from __future__ import annotations
 
@@ -95,6 +96,18 @@ check("PartRenderer.Render" in preview and "function BuildPreview:SetMirror" in 
 check("PartCatalog.GetList()" in controller and "assert(#catalog == 100" in controller, "client is not driven by the 100-part catalog")
 check("local PARTS" not in controller, "old hardcoded client PARTS table returned")
 check("SetInventoryCounts" in ui and 'Action="Inventory"' in controller, "live buildable inventory UI is not wired")
+
+# Workshop V3 visual architecture. These checks intentionally require more than a reskin:
+# real procedural thumbnails, a grid catalog, command-deck telemetry, tabs, and motion polish.
+check("TweenService" in ui, "Workshop V3 must use TweenService for restrained motion/hover transitions")
+check("ViewportFrame" in ui and "WorldModel" in ui, "Workshop V3 must render real 3D part previews")
+check("PartRenderer" in ui and "PartRenderer.Render" in ui, "Workshop V3 thumbnails must use the canonical procedural renderer")
+check("UIGridLayout" in ui, "Workshop V3 catalog must use a visual card grid rather than the old text row stack")
+check("COMMAND DECK" in ui, "Workshop V3 command-deck header/telemetry identity is missing")
+check("WORKSHOP_TABS" in ui and "BLUEPRINTS" in ui and "CONTROLS" in ui, "Workshop V3 tabbed secondary tools are missing")
+check("InspectorViewport" in ui, "Workshop V3 selected-part 3D inspector preview is missing")
+check("EngineeringStrip" in ui, "Workshop V3 compact live engineering strip is missing")
+check("local right=Instance.new(\"ScrollingFrame\")" not in ui, "old permanently stacked right-side panel architecture returned")
 
 # Required services and remotes.
 service_root = ROOT / "src/ServerScriptService/MechFramework/Services"
