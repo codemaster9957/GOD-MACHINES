@@ -1,11 +1,13 @@
 --!nonstrict
--- Procedural build ghost. Rotation and true X mirroring use the same BuildMath as authoritative placement.
+-- Procedural build ghost. Smart snapping, XYZ orientation and true X mirroring share BuildMath with server placement.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local PartRenderer = require(ReplicatedStorage.MechFramework.Shared.PartRenderer)
 
 local BuildPreview={}
 BuildPreview.__index=BuildPreview
+
+local AXES={"X","Y","Z"}
 
 local function splitCompatibility(value)
 	local out={}
@@ -14,8 +16,13 @@ local function splitCompatibility(value)
 	return out
 end
 
-local function freeTransform(hitPosition,size,turns)
-	return CFrame.new(hitPosition+Vector3.new(0,size.Y/2,0))*CFrame.Angles(0,math.rad((turns%4)*90),0)
+local function cloneOrientation(value)
+	return {X=value.X or 0,Y=value.Y or 0,Z=value.Z or 0}
+end
+
+local function freeTransform(hitPosition,size,orientation,BuildMath)
+	local rotation=BuildMath.OrientationCFrame(orientation)
+	return CFrame.new(hitPosition+Vector3.new(0,size.Y/2,0))*rotation
 end
 
 local function componentRootFrom(instance)
@@ -36,9 +43,10 @@ end
 function BuildPreview.new(mouse,BuildMath)
 	local self=setmetatable({},BuildPreview)
 	self.Mouse=mouse; self.BuildMath=BuildMath; self.Enabled=false; self.Definition=nil
-	self.Ghost=nil; self.GhostRoot=nil; self.Turns=0; self.MirrorX=false
+	self.Ghost=nil; self.GhostRoot=nil; self.Orientation={X=0,Y=0,Z=0}; self.RotationAxis="Y"; self.MirrorX=false
 	self.TargetPart=nil; self.TargetNode=nil; self.SourceNode=nil
 	self.PreviewCFrame=CFrame.new(); self.RejectedUntil=0; self.LastState="OFF"; self.Paint=nil
+	self.SnapCandidates={}; self.SnapCycle=0; self._snapContextPart=nil
 	return self
 end
 
@@ -70,6 +78,7 @@ function BuildPreview:SetEnabled(enabled)
 		if self.Definition then self:_createGhost() end
 	else
 		self:_destroyGhost(); self.TargetPart,self.TargetNode,self.SourceNode=nil,nil,nil; self.LastState="OFF"
+		self.SnapCandidates={}; self.SnapCycle=0; self._snapContextPart=nil
 	end
 end
 
@@ -77,7 +86,8 @@ function BuildPreview:SetDefinition(definition)
 	if type(definition)~="table" or typeof(definition.Size)~="Vector3" or type(definition.Geometry)~="table" then
 		self.Definition=nil; self:_destroyGhost(); return false
 	end
-	self.Definition=definition; self.Paint=definition.PaintDefaults; self.Turns=0; self.MirrorX=false
+	self.Definition=definition; self.Paint=definition.PaintDefaults; self.Orientation={X=0,Y=0,Z=0}; self.RotationAxis="Y"; self.MirrorX=false
+	self.SnapCandidates={}; self.SnapCycle=0; self._snapContextPart=nil
 	if self.Enabled then self:_createGhost() end
 	return true
 end
@@ -87,14 +97,42 @@ function BuildPreview:SetPaint(paint)
 	if self.Ghost and self.Definition then PartRenderer.ApplyPaint(self.Ghost,self.Definition,paint); self:_setVisualState(self.LastState) end
 end
 
-function BuildPreview:Rotate()
-	self.Turns=(self.Turns+1)%4
+function BuildPreview:SetRotationAxis(axis)
+	local upper=string.upper(tostring(axis or ""))
+	if upper~="X" and upper~="Y" and upper~="Z" then return self.RotationAxis end
+	self.RotationAxis=upper
+	return self.RotationAxis
+end
+
+function BuildPreview:CycleRotationAxis(direction)
+	local current=table.find(AXES,self.RotationAxis) or 2
+	local delta=if tonumber(direction) and tonumber(direction)<0 then -1 else 1
+	current=((current-1+delta)%#AXES)+1
+	self.RotationAxis=AXES[current]
+	return self.RotationAxis
+end
+
+function BuildPreview:Rotate(axis)
+	local selected=self:SetRotationAxis(axis or self.RotationAxis)
+	self.Orientation[selected]=((tonumber(self.Orientation[selected]) or 0)+1)%4
+	return cloneOrientation(self.Orientation),selected
+end
+
+function BuildPreview:GetOrientation()
+	return cloneOrientation(self.Orientation)
+end
+
+function BuildPreview:CycleSnap(direction)
+	local delta=if tonumber(direction) and tonumber(direction)<0 then -1 else 1
+	self.SnapCycle+=delta
+	return self.SnapCycle
 end
 
 function BuildPreview:SetMirror(mirrored)
 	local nextValue=mirrored==true
 	if self.MirrorX==nextValue then return self.MirrorX end
 	self.MirrorX=nextValue
+	self.SnapCandidates={}; self.SnapCycle=0
 	if self.Enabled and self.Definition then
 		self:_createGhost()
 		self:_moveGhost(self.PreviewCFrame)
@@ -110,27 +148,72 @@ end
 function BuildPreview:_targetNodeData(attachment)
 	local accepts=splitCompatibility(attachment:GetAttribute("Compatibility"))
 	if #accepts==0 then accepts={"*"} end
-	return {Name=attachment.Name,Type=tostring(attachment:GetAttribute("NodeType") or ""),Transform=attachment.CFrame,Accepts=accepts,CompatibleWith=accepts}
+	return {
+		Name=attachment.Name,
+		Type=tostring(attachment:GetAttribute("NodeType") or ""),
+		Transform=attachment.CFrame,
+		Accepts=accepts,
+		CompatibleWith=accepts,
+		Priority=tonumber(attachment:GetAttribute("Priority")) or 0,
+	}
 end
 
-function BuildPreview:_findCompatiblePair(part,hitPosition)
-	if not self.Definition or type(self.Definition.AttachmentNodes)~="table" then return nil,nil end
-	local candidates={}
+function BuildPreview:_rankCompatiblePairs(part,hitPosition)
+	if not self.Definition or type(self.Definition.AttachmentNodes)~="table" then return {} end
+	local targetAttachments={}
 	for _,object in ipairs(part:GetChildren()) do
-		if object:IsA("Attachment") and object:GetAttribute("BuildNode")==true and object:GetAttribute("Occupied")~=true then table.insert(candidates,object) end
+		if object:IsA("Attachment") and object:GetAttribute("BuildNode")==true and object:GetAttribute("Occupied")~=true then
+			table.insert(targetAttachments,object)
+		end
 	end
-	table.sort(candidates,function(a,b) return (a.WorldPosition-hitPosition).Magnitude<(b.WorldPosition-hitPosition).Magnitude end)
 	local sourceNodes=self.BuildMath.AttachmentNodes(self.Definition,self.MirrorX)
-	for _,attachment in ipairs(candidates) do
+	local camera=workspace.CurrentCamera
+	local pairs={}
+	for _,attachment in ipairs(targetAttachments) do
 		local targetData=self:_targetNodeData(attachment)
+		local cursorDistance=(attachment.WorldPosition-hitPosition).Magnitude
+		local facingPenalty=0
+		if camera then
+			local toCamera=camera.CFrame.Position-attachment.WorldPosition
+			if toCamera.Magnitude>.001 then
+				local facing=math.clamp(attachment.WorldCFrame.LookVector:Dot(toCamera.Unit),-1,1)
+				facingPenalty=(1-facing)*.3
+			end
+		end
 		for _,source in ipairs(sourceNodes) do
 			if type(source)=="table" and type(source.Name)=="string" and typeof(source.Transform)=="CFrame" then
 				local ok,compatible=pcall(self.BuildMath.Compatible,targetData,source)
-				if ok and compatible then return attachment,source end
+				if ok and compatible then
+					local priority=(tonumber(targetData.Priority) or 0)+(tonumber(source.Priority) or 0)
+					local score=cursorDistance+facingPenalty-priority*.002
+					table.insert(pairs,{
+						Attachment=attachment,
+						Source=source,
+						Score=score,
+						Key=attachment.Name.."|"..source.Name,
+					})
+				end
 			end
 		end
 	end
-	return nil,nil
+	table.sort(pairs,function(a,b)
+		if math.abs(a.Score-b.Score)>.0001 then return a.Score<b.Score end
+		return a.Key<b.Key
+	end)
+	return pairs
+end
+
+function BuildPreview:_findCompatiblePair(part,hitPosition)
+	local pairs=self:_rankCompatiblePairs(part,hitPosition)
+	self.SnapCandidates=pairs
+	if part~=self._snapContextPart then
+		self._snapContextPart=part
+		self.SnapCycle=0
+	end
+	if #pairs==0 then return nil,nil end
+	local index=((self.SnapCycle%#pairs)+#pairs)%#pairs+1
+	local chosen=pairs[index]
+	return chosen.Attachment,chosen.Source
 end
 
 function BuildPreview:_moveGhost(transform)
@@ -142,7 +225,7 @@ function BuildPreview:Update(activeMechId)
 	self.TargetPart,self.TargetNode,self.SourceNode=nil,nil,nil
 	local hitPosition=self.Mouse.Hit.Position
 	local candidate=componentRootFrom(self.Mouse.Target)
-	self.PreviewCFrame=freeTransform(hitPosition,self.Definition.Size,self.Turns)
+	self.PreviewCFrame=freeTransform(hitPosition,self.Definition.Size,self.Orientation,self.BuildMath)
 
 	if candidate then
 		local candidateMechId=candidate:GetAttribute("MechId")
@@ -150,7 +233,7 @@ function BuildPreview:Update(activeMechId)
 		if candidateMechId~=activeMechId then self:_moveGhost(self.PreviewCFrame); self.LastState="OTHER_MECH"; self:_setVisualState(self.LastState); return self.LastState end
 		local attachment,source=self:_findCompatiblePair(candidate,hitPosition)
 		if attachment and source then
-			local ok,snapped=pcall(self.BuildMath.Snap,candidate.CFrame,attachment.CFrame,source.Transform,self.Turns)
+			local ok,snapped=pcall(self.BuildMath.Snap,candidate.CFrame,attachment.CFrame,source.Transform,self.Orientation)
 			if ok and typeof(snapped)=="CFrame" then
 				self.TargetPart=candidate; self.TargetNode=attachment.Name; self.SourceNode=source.Name; self.PreviewCFrame=snapped
 				self:_moveGhost(snapped); self.LastState="SNAP"; self:_setVisualState(self.LastState); return self.LastState
@@ -159,6 +242,7 @@ function BuildPreview:Update(activeMechId)
 		self:_moveGhost(self.PreviewCFrame); self.LastState="NO_COMPATIBLE_NODE"; self:_setVisualState(self.LastState); return self.LastState
 	end
 
+	self.SnapCandidates={}; self._snapContextPart=nil; self.SnapCycle=0
 	self:_moveGhost(self.PreviewCFrame)
 	if os.clock()<self.RejectedUntil then self.LastState="REJECTED"
 	elseif type(activeMechId)=="string" then self.LastState="ATTACHMENT_REQUIRED"
@@ -176,8 +260,13 @@ function BuildPreview:GetPlacement(activeMechId)
 	local targetComponentId,targetMechId=nil,nil
 	if self.TargetPart then targetComponentId=self.TargetPart:GetAttribute("ComponentId"); targetMechId=self.TargetPart:GetAttribute("MechId") end
 	return {
-		Transform=self.PreviewCFrame, Rotation=self.Turns, MirrorX=self.MirrorX,
-		TargetComponentId=targetComponentId, TargetMechId=targetMechId, TargetNode=self.TargetNode, SourceNode=self.SourceNode,
+		Transform=self.PreviewCFrame,
+		Orientation=cloneOrientation(self.Orientation),
+		MirrorX=self.MirrorX,
+		TargetComponentId=targetComponentId,
+		TargetMechId=targetMechId,
+		TargetNode=self.TargetNode,
+		SourceNode=self.SourceNode,
 	},nil
 end
 
