@@ -87,6 +87,7 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 	if not part then return false, "NoPhysicalWeapon" end
 	local model = assemblyModel(mechId)
 	if not model then return false, "NoPhysicalWeapon" end
+
 	local forward = part.CFrame.LookVector
 	local direction = forward
 	if type(aim) == "table" and typeof(aim.Direction) == "Vector3" and aim.Direction.Magnitude > .9 then
@@ -95,19 +96,24 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 		if maxArc > 0 and math.acos(math.clamp(forward:Dot(requested), -1, 1)) <= maxArc then direction = requested end
 	end
 	local origin = part.Position + forward * (math.max(part.Size.Z, part.Size.X, part.Size.Y) * .5 + .2)
+
+	-- RequiredPower is a bus/output gate. EnergyUsage is finite per-shot energy and therefore
+	-- drains actual batteries/capacitors atomically; repeated shots cannot reuse the same charge.
 	local energyUsage = math.max(0, tonumber(config.EnergyUsage) or 0)
 	if energyUsage > 0 then
-		local suppliedResult = self._power:RequestPower(mechId, weaponId, energyUsage)
-		local supplied = tonumber(suppliedResult) or 0
-		if supplied < energyUsage then return false, "PowerRejected" end
+		local supplied, powerReason = self._power:ConsumeEnergy(mechId, weaponId, energyUsage, false)
+		if supplied + 1e-6 < energyUsage then return false, powerReason or "InsufficientStoredEnergy" end
 	end
+
 	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
 	if ammoUsage > 0 then self._ammo[mechId] = math.max(0, self:_ammoState(mechId) - ammoUsage) end
 	self._lastFire[weaponId] = os.clock()
+
 	local heatGenerated = math.max(0, tonumber(config.HeatGenerated) or 0)
 	if heatGenerated > 0 then self._heat:AddHeat(mechId, weaponId, heatGenerated) end
 	local projectileSuccess = self._projectiles:Fire(origin, direction, config, {MechId=mechId, WeaponId=weaponId, UserId=userId, Ignore=model})
 	if projectileSuccess == false then return false, "ProjectileRejected" end
+
 	local recoil = math.max(0, tonumber(config.Recoil) or 0)
 	if recoil > 0 then
 		local assembly = part.AssemblyRootPart or part
@@ -129,6 +135,10 @@ function Combat:DebugWeapon(mechId: string, weaponId: string): any
 	local weapon = self._mechs:GetComponent(mechId, weaponId)
 	if not weapon or weapon.Combat == nil then return nil end
 	local ammo, capacity = self:GetAmmo(mechId)
-	return {Config=Definitions.Resolve(weapon.Combat), Ammo=ammo, AmmoCapacity=capacity, LastFire=self._lastFire[weaponId], Power=self._power:GetPowerState(mechId, weaponId), Temperature=self._heat:GetTemperature(mechId, weaponId)}
+	return {
+		Config=Definitions.Resolve(weapon.Combat), Ammo=ammo, AmmoCapacity=capacity,
+		LastFire=self._lastFire[weaponId], Power=self._power:GetPowerState(mechId, weaponId),
+		Temperature=self._heat:GetTemperature(mechId, weaponId),
+	}
 end
 return Combat
