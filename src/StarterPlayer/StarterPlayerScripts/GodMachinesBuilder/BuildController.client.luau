@@ -63,6 +63,10 @@ local function startupReason(fallback)
 	return fallback
 end
 
+local function profileReady()
+	return player:GetAttribute("GMProfileReady") == true
+end
+
 local function waitForReady(attributeName, timeoutSeconds)
 	if framework:GetAttribute(attributeName) == true then return true, nil end
 	local deadline = os.clock() + (timeoutSeconds or 8)
@@ -339,6 +343,10 @@ local function selectSlot(slot)
 end
 
 local function refreshBlueprints(silent)
+	if not profileReady() then
+		if not silent then status("PROFILE LOADING — BLUEPRINTS WILL APPEAR AUTOMATICALLY", "blue", 1.2) end
+		return false
+	end
 	if framework:GetAttribute("MachineServerReady") ~= true then
 		if not silent then status(startupReason("BLUEPRINT SYSTEM NOT READY"), "bad", 1) end
 		return false
@@ -353,6 +361,7 @@ local function refreshBlueprints(silent)
 end
 
 local function saveBlueprint(name)
+	if not profileReady() then status("PROFILE LOADING — PLEASE WAIT", "blue", 1); return end
 	if not mechId then status("NO ACTIVE MACHINE", "bad", .8); return end
 	name = tostring(name or ""):match("^%s*(.-)%s*$")
 	if name == "" then status("ENTER A BLUEPRINT NAME", "bad", .8); return end
@@ -366,6 +375,7 @@ local function saveBlueprint(name)
 end
 
 local function loadBlueprint(name)
+	if not profileReady() then status("PROFILE LOADING — PLEASE WAIT", "blue", 1); return end
 	name = tostring(name or ""):match("^%s*(.-)%s*$")
 	if name == "" then status("SELECT OR ENTER A BLUEPRINT NAME", "bad", .8); return end
 	local success, result = machineInvoke({ Action="LoadBlueprint", Name=name }, 8)
@@ -384,6 +394,7 @@ local function loadBlueprint(name)
 end
 
 local function deleteBlueprint(name)
+	if not profileReady() then status("PROFILE LOADING — PLEASE WAIT", "blue", 1); return end
 	name = tostring(name or ""):match("^%s*(.-)%s*$")
 	if name == "" then status("SELECT A BLUEPRINT TO DELETE", "bad", .8); return end
 	local success, result = machineInvoke({ Action="DeleteBlueprint", Name=name }, 6)
@@ -441,7 +452,7 @@ end
 local function updateMachineReady()
 	local ready = framework:GetAttribute("MachineServerReady") == true
 	ui:SetMachineReady(ready)
-	if ready then refreshBlueprints(true) end
+	if ready and profileReady() then refreshBlueprints(true) end
 end
 
 ui.Callbacks.SelectPart = selectPart
@@ -483,6 +494,16 @@ player:GetAttributeChangedSignal("ActiveMechId"):Connect(function()
 	if value ~= mechId then setActiveMech(value, true) end
 end)
 
+player:GetAttributeChangedSignal("GMProfileReady"):Connect(function()
+	if profileReady() then
+		task.spawn(function() refreshInventory(true) end)
+		if framework:GetAttribute("MachineServerReady") == true then task.spawn(function() refreshBlueprints(true) end) end
+		if buildMode then status("PROFILE READY — WORKSHOP INVENTORY LOADED", "good", .8) end
+	else
+		ui:SetBlueprints({})
+	end
+end)
+
 framework:GetAttributeChangedSignal("MachineServerReady"):Connect(updateMachineReady)
 
 task.spawn(function()
@@ -499,7 +520,7 @@ end)
 task.spawn(function()
 	local ready = waitForReady("MachineServerReady", 12)
 	updateMachineReady()
-	if ready then refreshBlueprints(true) end
+	if ready and profileReady() then refreshBlueprints(true) end
 end)
 
 local renderConnection = RunService.RenderStepped:Connect(function()
