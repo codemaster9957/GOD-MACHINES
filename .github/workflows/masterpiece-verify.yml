@@ -73,6 +73,6 @@ jobs:
         shell: bash
         run: /tmp/luau-build/luau tests/vehicle_trade_spec.luau
 
-      - name: Run combat-polish behavior spec
+      - name: Run combat-polish contract
         shell: bash
-        run: /tmp/luau-build/luau tests/combat_polish_spec.luau
+        run: python scripts/test_combat_polish_contract.py
