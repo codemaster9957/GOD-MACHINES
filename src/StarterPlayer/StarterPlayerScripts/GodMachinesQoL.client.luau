@@ -214,6 +214,14 @@ local function workshopSearch()
 	for _,d in ipairs(w:GetDescendants()) do if d:IsA("TextBox") and tostring(d.PlaceholderText):find("SEARCH COMPONENTS") then return d end end
 	return nil
 end
+local function releaseOwnedFocus()
+	local focused=UserInputService:GetFocusedTextBox()
+	if not focused then return end
+	local workshop=workshopGui()
+	if focused:IsDescendantOf(gui) or (workshop and focused:IsDescendantOf(workshop)) then
+		focused:ReleaseFocus()
+	end
+end
 local function catalogGrid()
 	local w=workshopGui(); return w and w:FindFirstChild("CatalogCardGrid",true) or nil
 end
@@ -358,10 +366,22 @@ local function panelVisibility()
 	overlayShade.Visible=commandPalette.Visible or settingsPanel.Visible
 end
 local function toggleSettings()
-	settingsPanel.Visible=not settingsPanel.Visible; if settingsPanel.Visible then commandPalette.Visible=false end; panelVisibility()
+	settingsPanel.Visible=not settingsPanel.Visible
+	if settingsPanel.Visible then
+		if commandPalette.Visible then commandPalette.Visible=false; releaseOwnedFocus() end
+	else
+		releaseOwnedFocus()
+	end
+	panelVisibility()
 end
 local function toggleCommandPalette()
-	commandPalette.Visible=not commandPalette.Visible; if commandPalette.Visible then settingsPanel.Visible=false; commandSearch.Text=""; commandSearch:CaptureFocus() end; panelVisibility()
+	commandPalette.Visible=not commandPalette.Visible
+	if commandPalette.Visible then
+		settingsPanel.Visible=false; commandSearch.Text=""; commandSearch:CaptureFocus()
+	else
+		releaseOwnedFocus()
+	end
+	panelVisibility()
 end
 settingsClose.MouseButton1Click:Connect(toggleSettings)
 
@@ -450,14 +470,14 @@ track(UserInputService.InputBegan:Connect(function(input, processed)
 			for _,entry in ipairs(commandButtons) do if entry.Button.Visible then commandPalette.Visible=false; panelVisibility(); commandSearch:ReleaseFocus(); entry.Run(); break end end
 		elseif input.KeyCode==Enum.KeyCode.Escape then
 			if commandPalette.Visible then commandPalette.Visible=false; commandSearch:ReleaseFocus(); panelVisibility()
-			elseif focused==workshopSearch() and focused.Text~="" then focused.Text=""; focused:ReleaseFocus() end
+			elseif focused==workshopSearch() then focused.Text=""; focused:ReleaseFocus() end
 		end
 		return
 	end
 	if ctrlHeld() and input.KeyCode==Enum.KeyCode.K then toggleCommandPalette(); return end
 	if input.KeyCode==Enum.KeyCode.F10 then toggleSettings(); return end
 	if commandPalette.Visible or settingsPanel.Visible then
-		if input.KeyCode==Enum.KeyCode.Escape then commandPalette.Visible=false; settingsPanel.Visible=false; panelVisibility() end
+		if input.KeyCode==Enum.KeyCode.Escape then commandPalette.Visible=false; settingsPanel.Visible=false; releaseOwnedFocus(); panelVisibility() end
 		return
 	end
 	if player:GetAttribute("BuildMode")==true then
@@ -475,7 +495,7 @@ track(UserInputService.InputEnded:Connect(function(input)
 end))
 
 for key in pairs(QoLDefinitions.Defaults) do track(player:GetAttributeChangedSignal(PREFIX..key):Connect(function() applyAccessibility(); updateWorkshopChip() end)) end
-track(player:GetAttributeChangedSignal("BuildMode"):Connect(function() if player:GetAttribute("BuildMode")~=true then setFavoritesFilter(false) end; updateWorkshopChip(); updateTarget() end))
+track(player:GetAttributeChangedSignal("BuildMode"):Connect(function() if player:GetAttribute("BuildMode")~=true then releaseOwnedFocus(); setFavoritesFilter(false) end; updateWorkshopChip(); updateTarget() end))
 track(player:GetAttributeChangedSignal("ActiveMechId"):Connect(updateTarget))
 track(playerGui.DescendantAdded:Connect(function(descendant) task.defer(function() if descendant:IsA("GuiButton") then bindTooltip(descendant) elseif descendant:IsA("TextBox") then bindFocus(descendant) end; applyAccessibility(); updateWorkshopChip() end) end))
 track(playerGui.ChildAdded:Connect(function() task.defer(function() applyAccessibility(); updateWorkshopChip() end) end))
@@ -488,6 +508,7 @@ track(RunService.RenderStepped:Connect(function()
 end))
 
 script.Destroying:Connect(function()
+	releaseOwnedFocus()
 	for _,connection in ipairs(connections) do pcall(function() connection:Disconnect() end) end
 	for _,pair in pairs(tooltipConnections) do for _,connection in ipairs(pair) do pcall(function() connection:Disconnect() end) end end
 	for _,pair in pairs(focusConnections) do for _,connection in ipairs(pair) do pcall(function() connection:Disconnect() end) end end
