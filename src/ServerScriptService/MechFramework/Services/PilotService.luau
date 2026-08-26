@@ -4,6 +4,8 @@
 local Players=game:GetService("Players")
 local Workspace=game:GetService("Workspace")
 local RunService=game:GetService("RunService")
+local ReplicatedStorage=game:GetService("ReplicatedStorage")
+local PresetBlueprints=require(ReplicatedStorage.MechFramework.Shared.PresetBlueprints)
 local Pilot:any={_seatPilots={},_lastScan=0}
 
 local function clone(value:any):any
@@ -110,14 +112,24 @@ end
 function Pilot:_spawnBlueprint(player:Player,name:string):(boolean,any)
 	if not self:_profileReady(player) then return false,"ProfileLoading" end
 	if #name<1 or #name>40 then return false,"InvalidBlueprintName" end
-	local blueprint=self._save:GetBlueprint(player.UserId,name); if not blueprint then return false,"BlueprintNotFound" end
+	local blueprint=PresetBlueprints.Get(name)
+	local isFactory=blueprint~=nil and blueprint.FactoryPreset==true
+	if not blueprint then blueprint=self._save:GetBlueprint(player.UserId,name) end
+	if not blueprint then return false,"BlueprintNotFound" end
 	local character=player.Character; local hrp=character and character:FindFirstChild("HumanoidRootPart")
 	if not hrp or not hrp:IsA("BasePart") then return false,"CharacterNotReady" end
-	local ok,result=self._build:SpawnBlueprint(player.UserId,blueprint,hrp.CFrame*CFrame.new(0,1,-12),{BuildOrigin=true,BattleSpawn=false,ConsumeInventory=true})
+	local spawnDistance=if isFactory then -22 else -12
+	local ok,result=self._build:SpawnBlueprint(player.UserId,blueprint,hrp.CFrame*CFrame.new(0,1,spawnDistance),{BuildOrigin=true,BattleSpawn=false,FactoryPreset=isFactory,ConsumeInventory=not isFactory})
 	if not ok then return false,result end
 	local mechId=result; player:SetAttribute("ActiveMechId",mechId)
 	if type(blueprint.Controls)=="table" then self._control:SetBindings(player.UserId,mechId,blueprint.Controls,true) else self._control:GenerateDefaultBindings(player.UserId,mechId,true) end
-	return true,{MechId=mechId,Name=name}
+	return true,{MechId=mechId,Name=name,DisplayName=blueprint.DisplayName or name,FactoryPreset=isFactory}
+end
+
+function Pilot:_listBlueprints(player:Player):{any}
+	local result=PresetBlueprints.List()
+	for _,entry in ipairs(self._save:ListBlueprints(player.UserId)) do table.insert(result,entry) end
+	return result
 end
 
 function Pilot:_scanSeats()
@@ -157,10 +169,12 @@ function Pilot:Start()
 			if type(request.Name)~="string" then return false,"BadBlueprintRequest" end; return self:_spawnBlueprint(player,request.Name)
 		elseif action=="ListBlueprints" then
 			if not self:_profileReady(player) then return false,"ProfileLoading" end
-			return true,self._save:ListBlueprints(player.UserId)
+			return true,self:_listBlueprints(player)
 		elseif action=="DeleteBlueprint" then
 			if not self:_profileReady(player) then return false,"ProfileLoading" end
-			if type(request.Name)~="string" then return false,"BadBlueprintRequest" end; local removed=self._save:DeleteBlueprint(player.UserId,request.Name); return removed,if removed then "Deleted" else "BlueprintNotFound"
+			if type(request.Name)~="string" then return false,"BadBlueprintRequest" end
+			if PresetBlueprints.Get(request.Name) then return false,"FactoryPresetProtected" end
+			local removed=self._save:DeleteBlueprint(player.UserId,request.Name); return removed,if removed then "Deleted" else "BlueprintNotFound"
 		elseif action=="GetBindings" then
 			if type(request.MechId)~="string" or not self._mechs:IsOwner(player.UserId,request.MechId) then return false,"NotAuthorized" end; return true,self._control:GetBindings(request.MechId)
 		elseif action=="SetBindings" then

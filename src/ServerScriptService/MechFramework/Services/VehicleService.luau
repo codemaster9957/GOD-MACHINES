@@ -163,7 +163,7 @@ function Vehicle:_stepModel(model: Model, dt: number)
 		force.Force=totalForce
 
 		-- Free casters and omni wheels are not fake steering axles. Only declared steerable modules turn the chassis.
-		if grounded and steer~=0 and mobility.Steer==true and mobility.FreeCaster~=true then
+		if grounded and steer~=0 and mobility.FreeCaster~=true and (mobility.Steer==true or mobility.Kind=="TrackDrive" or mobility.Kind=="OmniWheel") then
 			totalSteer+=steer
 			groundedSteer+=1
 		end
