@@ -30,6 +30,9 @@ jobs:
       - name: Verify GOD MACHINES architecture
         run: python scripts/verify_masterpiece.py
 
+      - name: Run Structural category regression spec
+        run: python tests/structural_category_source_spec.py
+
   luau-syntax:
     name: Compile and test Luau
     runs-on: ubuntu-latest
