@@ -39,8 +39,11 @@ function Policy.Derive(components: {[string]: any}?): Groups
 	for _, componentId in ipairs(ids) do
 		local component = components[componentId]
 		local requested = component.Combat.DefaultAction
-		local action = if type(requested) == "string" and VALID_ACTIONS[requested] then requested else "Primary"
-		table.insert(groups[action], componentId)
+		if requested == "Secondary" then
+			table.insert(groups.Secondary, componentId)
+		else
+			table.insert(groups.Primary, componentId)
+		end
 	end
 
 	return groups
