@@ -120,6 +120,12 @@ function BuildPreview:_targetNodeData(attachment)
 	return {Name=attachment.Name,Type=tostring(attachment:GetAttribute("NodeType") or ""),Transform=attachment.CFrame,Accepts=accepts,CompatibleWith=accepts}
 end
 
+function BuildPreview:_hasBuildSurface()
+	if self.Mouse.Target~=nil then return true end
+	local distance=(self.Mouse.Hit.Position-self.Mouse.Origin.Position).Magnitude
+	return distance<995
+end
+
 function BuildPreview:_hasClearance(transform)
 	if not self.Definition or typeof(self.Definition.Size)~="Vector3" or typeof(transform)~="CFrame" then return false end
 	local params=OverlapParams.new()
@@ -185,6 +191,7 @@ function BuildPreview:Update(activeMechId)
 	self:_moveGhost(self.PreviewCFrame)
 	if os.clock()<self.RejectedUntil then self.LastState="REJECTED"
 	elseif type(activeMechId)=="string" then self.LastState="ATTACHMENT_REQUIRED"
+	elseif not self:_hasBuildSurface() then self.LastState="NO_BUILD_SURFACE"
 	elseif not self:_hasClearance(self.PreviewCFrame) then self.LastState="BLOCKED"
 	else self.LastState="FREE" end
 	self:_setVisualState(self.LastState)
