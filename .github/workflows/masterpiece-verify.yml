@@ -5,6 +5,7 @@ on:
     branches:
       - feat/masterpiece-builder-v2
       - feat/vehicle-quick-swap
+      - feat/god-machines-finish-pass
   pull_request:
     branches:
       - main
@@ -67,3 +68,11 @@ jobs:
       - name: Run quick-swap behavior spec
         shell: bash
         run: /tmp/luau-build/luau tests/quick_swap_spec.luau
+
+      - name: Run vehicle-trade behavior spec
+        shell: bash
+        run: /tmp/luau-build/luau tests/vehicle_trade_spec.luau
+
+      - name: Run combat-polish behavior spec
+        shell: bash
+        run: /tmp/luau-build/luau tests/combat_polish_spec.luau
