@@ -42,6 +42,7 @@ local statusLockUntil = 0
 local lastSummaryAt = 0
 local summaryBusy = false
 local inventoryBusy = false
+local placementBusy = false
 local input = nil
 local currentBindings = {}
 local duplicateSourceId = nil
@@ -209,7 +210,7 @@ local function toggleBuildMode()
 end
 
 local function placePart()
-	if not buildMode then return end
+	if not buildMode or placementBusy then return end
 	preview:Update(mechId)
 	local data, previewReason = preview:GetPlacement(mechId)
 	if not data then
@@ -232,7 +233,10 @@ local function placePart()
 		Rotation=data.Rotation, MirrorX=data.MirrorX == true,
 	}
 	if duplicateActive then request.ComponentId=duplicateSourceId end
+	placementBusy=true
+	status("INSTALLING COMPONENT", "blue", 30)
 	local success, result = buildInvoke(request, 8)
+	placementBusy=false
 	if success then
 		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
 		task.spawn(function() refreshInventory(true) end)
