@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - feat/masterpiece-builder-v2
+      - feat/vehicle-quick-swap
   pull_request:
     branches:
       - main
+      - feat/masterpiece-builder-v2
 
 permissions:
   contents: read
@@ -28,13 +30,13 @@ jobs:
         run: python scripts/verify_masterpiece.py
 
   luau-syntax:
-    name: Compile every Luau source
+    name: Compile and test Luau
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build official Luau compiler
+      - name: Build official Luau tools
         shell: bash
         run: |
           set -euo pipefail
@@ -44,8 +46,9 @@ jobs:
             -DLUAU_BUILD_CLI=ON \
             -DLUAU_BUILD_TESTS=OFF \
             -DLUAU_BUILD_WEB=OFF
-          cmake --build /tmp/luau-build --target Luau.Compile.CLI -j 2
+          cmake --build /tmp/luau-build --target Luau.Compile.CLI Luau.Repl.CLI -j 2
           test -x /tmp/luau-build/luau-compile
+          test -x /tmp/luau-build/luau
 
       - name: Syntax-check repository Luau
         shell: bash
@@ -57,6 +60,10 @@ jobs:
             echo "Checking $file"
             "$compiler" "$file" >/dev/null
             checked=$((checked + 1))
-          done < <(find src -type f -name '*.luau' -print0 | sort -z)
+          done < <(find src tests -type f -name '*.luau' -print0 | sort -z)
           echo "Luau syntax passed for $checked files"
           test "$checked" -gt 0
+
+      - name: Run quick-swap behavior spec
+        shell: bash
+        run: /tmp/luau-build/luau tests/quick_swap_spec.luau
