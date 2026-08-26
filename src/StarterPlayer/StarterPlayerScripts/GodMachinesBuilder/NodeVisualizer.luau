@@ -10,6 +10,7 @@ local NodeVisualizer = {}
 NodeVisualizer.__index = NodeVisualizer
 
 local FREE = Color3.fromRGB(77, 232, 139)
+local BLOCKED = Color3.fromRGB(255, 82, 82)
 local OCCUPIED = Color3.fromRGB(255, 181, 54)
 local INCOMPATIBLE = Color3.fromRGB(120, 127, 135)
 
@@ -71,6 +72,12 @@ local function findModel(mechId)
 	return if model and model:IsA("Model") then model else nil
 end
 
+local function previewTarget()
+	local ghost = workspace:FindFirstChild("GodMachinesBuildGhost")
+	if not ghost or not ghost:IsA("Model") then return nil,nil,nil end
+	return ghost:GetAttribute("PreviewState"),ghost:GetAttribute("TargetComponentId"),ghost:GetAttribute("TargetNode")
+end
+
 function NodeVisualizer:_selectedSourceNodes()
 	local ghost = workspace:FindFirstChild("GodMachinesBuildGhost")
 	if not ghost or not ghost:IsA("Model") then
@@ -121,6 +128,7 @@ function NodeVisualizer:Update()
 	if not model then self:Clear(); return end
 
 	local sourceNodes = self:_selectedSourceNodes()
+	local previewState,previewComponentId,previewNode=previewTarget()
 	local live = {}
 	for _, descendant in ipairs(model:GetDescendants()) do
 		if descendant:IsA("Attachment") and descendant:GetAttribute("BuildNode") == true then
@@ -137,7 +145,14 @@ function NodeVisualizer:Update()
 					local ok, source = pcall(BuildMath.BestCompatibleSource, targetNodeData(descendant), sourceNodes)
 					compatible = ok and source ~= nil
 				end
-				if compatible then
+				local root=descendant.Parent
+				local componentId=if root then root:GetAttribute("ComponentId") else nil
+				local selectedBlocked=compatible and previewState=="BLOCKED" and previewComponentId==componentId and previewNode==descendant.Name
+				if selectedBlocked then
+					marker.Color = BLOCKED
+					marker.Size = Vector3.new(0.42, 0.42, 0.42)
+					marker.Transparency = 0.04
+				elseif compatible then
 					marker.Color = FREE
 					marker.Size = Vector3.new(0.36, 0.36, 0.36)
 					marker.Transparency = 0.08

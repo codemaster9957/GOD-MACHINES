@@ -42,6 +42,7 @@ local statusLockUntil = 0
 local lastSummaryAt = 0
 local summaryBusy = false
 local inventoryBusy = false
+local placementBusy = false
 local input = nil
 local currentBindings = {}
 local duplicateSourceId = nil
@@ -209,7 +210,7 @@ local function toggleBuildMode()
 end
 
 local function placePart()
-	if not buildMode then return end
+	if not buildMode or placementBusy then return end
 	preview:Update(mechId)
 	local data, previewReason = preview:GetPlacement(mechId)
 	if not data then
@@ -219,6 +220,8 @@ local function placePart()
 			OTHER_MECH="THAT IS NOT YOUR ACTIVE MACHINE",
 			NO_COMPATIBLE_NODE="NO COMPATIBLE ATTACHMENT",
 			START_ON_GROUND="START A NEW MACHINE ON OPEN GROUND",
+			NO_BUILD_SURFACE="AIM AT A BUILD SURFACE",
+			BLOCKED="PLACEMENT BLOCKED",
 		}
 		status(readable[previewReason] or previewReason or "INVALID PLACEMENT", "bad", .8)
 		return
@@ -231,7 +234,10 @@ local function placePart()
 		Rotation=data.Rotation, MirrorX=data.MirrorX == true,
 	}
 	if duplicateActive then request.ComponentId=duplicateSourceId end
+	placementBusy=true
+	status("INSTALLING COMPONENT", "blue", 30)
 	local success, result = buildInvoke(request, 8)
+	placementBusy=false
 	if success then
 		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
 		task.spawn(function() refreshInventory(true) end)
@@ -567,6 +573,8 @@ local renderConnection = RunService.RenderStepped:Connect(function()
 			elseif state=="OTHER_MECH" then ui:SetStatus("OTHER MACHINE", "bad")
 			elseif state=="NO_COMPATIBLE_NODE" then ui:SetStatus("NO COMPATIBLE NODE", "bad")
 			elseif state=="START_ON_GROUND" then ui:SetStatus("START ON OPEN GROUND", "bad")
+			elseif state=="NO_BUILD_SURFACE" then ui:SetStatus("AIM AT A BUILD SURFACE", "bad")
+			elseif state=="BLOCKED" then ui:SetStatus("PLACEMENT BLOCKED", "bad")
 			elseif state=="REJECTED" then ui:SetStatus("PLACEMENT REJECTED", "bad") end
 		end
 	end

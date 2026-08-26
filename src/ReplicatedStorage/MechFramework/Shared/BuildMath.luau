@@ -51,6 +51,17 @@ function BuildMath.MirrorX(transform: CFrame): CFrame
 	)
 end
 
+-- Use the same slightly inset overlap box on both client preview and server authority.
+-- The inset permits intentional face-to-face contact without treating the joint itself as penetration.
+function BuildMath.ClearanceSize(size: Vector3, inset: number?): Vector3
+	local amount=math.max(0,inset or 0.08)
+	return Vector3.new(
+		math.max(0.01,size.X-amount),
+		math.max(0.01,size.Y-amount),
+		math.max(0.01,size.Z-amount)
+	)
+end
+
 function BuildMath.Snap(targetWorld: CFrame, targetNode: CFrame, sourceNode: CFrame, quarterTurns: number): CFrame
 	local rotation=CFrame.Angles(0,0,math.rad((quarterTurns%4)*90))
 	return targetWorld*targetNode*CFrame.Angles(0,math.pi,0)*rotation*sourceNode:Inverse()
