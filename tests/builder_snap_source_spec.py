@@ -24,13 +24,13 @@ checks = {
         "src/ServerScriptService/MechFramework/Services/BuildService.luau",
         "BuildMath.BestCompatibleSource",
     ),
-    "node visualizer tracks selected definition": (
+    "node visualizer evaluates the selected ghost": (
         "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/NodeVisualizer.luau",
-        "function NodeVisualizer:SetDefinition",
+        "GodMachinesBuildGhost",
     ),
-    "builder controller feeds selected definition to node visualizer": (
-        "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau",
-        "nodes:SetDefinition",
+    "node visualizer uses shared compatibility/source selection": (
+        "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/NodeVisualizer.luau",
+        "BuildMath.BestCompatibleSource",
     ),
 }
 
