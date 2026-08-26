@@ -56,6 +56,14 @@ checks = {
         "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau",
         'state=="BLOCKED"',
     ),
+    "controller tracks placement request in flight": (
+        "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau",
+        "local placementBusy = false",
+    ),
+    "controller refuses overlapping placements": (
+        "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau",
+        "if not buildMode or placementBusy then return end",
+    ),
 }
 
 failures: list[str] = []
@@ -79,6 +87,10 @@ if "self:_clearance(definition,transform,exclusions)" not in server:
 controller = source("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau")
 if 'BLOCKED="PLACEMENT BLOCKED"' not in controller:
     failures.append("click feedback does not explain blocked placement")
+if "placementBusy=true" not in controller or "placementBusy=false" not in controller:
+    failures.append("placement request lock is not acquired and released around the server call")
+if 'status("INSTALLING COMPONENT", "blue", 30)' not in controller:
+    failures.append("placement request does not expose a stable in-flight status")
 
 visualizer = source("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/NodeVisualizer.luau")
 if 'previewState=="BLOCKED"' not in visualizer:
@@ -90,4 +102,4 @@ if failures:
         print(f" - {failure}")
     sys.exit(1)
 
-print("PASS: builder preview/server clearance parity and truthful blocked-node feedback are wired")
+print("PASS: builder integrity, truthful node feedback, and placement request serialization are wired")
