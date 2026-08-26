@@ -72,6 +72,7 @@ local accept=button(panel,"ACCEPT SWAP",UDim2.fromOffset(253,34),UDim2.fromOffse
 
 local overview:any={Blueprints={},Players={},Session=nil,TestDriveSeconds=120}
 local currentSession:any=nil
+local localTestEndAt:number?=nil
 local partnerIndex=1
 local vehicleIndex=1
 local visible=false
@@ -87,6 +88,11 @@ local function cycle(list:any,index:number):number
 	if type(list)~="table" or #list==0 then return 1 end
 	return (index % #list)+1
 end
+local function drawTestTimer(remaining:number)
+	remaining=math.max(0,remaining)
+	local mins=math.floor(remaining/60); local secs=math.floor(remaining%60)
+	timer.Text=string.format("TEST DRIVE  %d:%02d",mins,secs)
+end
 
 local function renderSession(session:any?)
 	currentSession=session
@@ -94,21 +100,22 @@ local function renderSession(session:any?)
 	invite.Visible=not active; partnerButton.Visible=not active; vehicleButton.Visible=true; partnerTitle.Visible=not active; vehicleTitle.Visible=true
 	offer.Visible=active; test.Visible=active; cancel.Visible=active; accept.Visible=active
 	if not session then
-		sessionTitle.Text="NO ACTIVE TRADE"; offerLine.Text="Select a player and a saved vehicle to begin."; timer.Text=""; return
+		localTestEndAt=nil; sessionTitle.Text="NO ACTIVE TRADE"; offerLine.Text="Select a player and a saved vehicle to begin."; timer.Text=""; return
 	end
 	if session.State=="Cancelled" then
-		sessionTitle.Text="TRADE CANCELLED"; offerLine.Text=tostring(session.CancelReason or "Cancelled"); timer.Text=""; return
+		localTestEndAt=nil; sessionTitle.Text="TRADE CANCELLED"; offerLine.Text=tostring(session.CancelReason or "Cancelled"); timer.Text=""; return
 	elseif session.State=="Committed" then
-		sessionTitle.Text="SWAP COMPLETE"; offerLine.Text="Vehicle ownership was exchanged and saved."; timer.Text="TRANSFER VERIFIED"; timer.TextColor3=palette.Good; return
+		localTestEndAt=nil; sessionTitle.Text="SWAP COMPLETE"; offerLine.Text="Vehicle ownership was exchanged and saved."; timer.Text="TRANSFER VERIFIED"; timer.TextColor3=palette.Good; return
 	end
 	timer.TextColor3=palette.Accent
 	sessionTitle.Text="TRADING WITH  "..string.upper(tostring(session.PartnerName or "PLAYER"))
 	offerLine.Text=string.format("You: %s\nThem: %s",tostring(session.YourOffer or "choose a vehicle"),tostring(session.PartnerOffer or "waiting for offer"))
 	if session.State=="Testing" then
-		local remaining=math.max(0,tonumber(session.TestRemaining) or 0); local mins=math.floor(remaining/60); local secs=math.floor(remaining%60)
-		timer.Text=string.format("TEST DRIVE  %d:%02d",mins,secs)
-	elseif session.State=="Review" then timer.Text="TEST COMPLETE — DECIDE"
-	else timer.Text="LOCK BOTH VEHICLES TO TEST" end
+		local remaining=math.max(0,tonumber(session.TestRemaining) or 0)
+		localTestEndAt=os.clock()+remaining
+		drawTestTimer(remaining)
+	elseif session.State=="Review" then localTestEndAt=nil; timer.Text="TEST COMPLETE — DECIDE"
+	else localTestEndAt=nil; timer.Text="LOCK BOTH VEHICLES TO TEST" end
 	accept.Text=(session.YourAccepted==true) and "ACCEPTED ✓" or "ACCEPT SWAP"
 	accept.TextColor3=(session.YourAccepted==true) and palette.Good or palette.Text
 end
@@ -160,8 +167,10 @@ end)
 task.spawn(function()
 	while gui.Parent do
 		task.wait(.25)
-		if currentSession and currentSession.State=="Testing" and currentSession.TestEndsAt then
-			currentSession.TestRemaining=math.max(0,currentSession.TestEndsAt-os.clock()); renderSession(currentSession)
+		if currentSession and currentSession.State=="Testing" and localTestEndAt then
+			local remaining=math.max(0,localTestEndAt-os.clock())
+			currentSession.TestRemaining=remaining
+			drawTestTimer(remaining)
 		end
 	end
 end)
