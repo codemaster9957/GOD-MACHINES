@@ -220,6 +220,7 @@ local function placePart()
 			OTHER_MECH="THAT IS NOT YOUR ACTIVE MACHINE",
 			NO_COMPATIBLE_NODE="NO COMPATIBLE ATTACHMENT",
 			START_ON_GROUND="START A NEW MACHINE ON OPEN GROUND",
+			NO_BUILD_SURFACE="AIM AT A BUILD SURFACE",
 			BLOCKED="PLACEMENT BLOCKED",
 		}
 		status(readable[previewReason] or previewReason or "INVALID PLACEMENT", "bad", .8)
@@ -572,6 +573,7 @@ local renderConnection = RunService.RenderStepped:Connect(function()
 			elseif state=="OTHER_MECH" then ui:SetStatus("OTHER MACHINE", "bad")
 			elseif state=="NO_COMPATIBLE_NODE" then ui:SetStatus("NO COMPATIBLE NODE", "bad")
 			elseif state=="START_ON_GROUND" then ui:SetStatus("START ON OPEN GROUND", "bad")
+			elseif state=="NO_BUILD_SURFACE" then ui:SetStatus("AIM AT A BUILD SURFACE", "bad")
 			elseif state=="BLOCKED" then ui:SetStatus("PLACEMENT BLOCKED", "bad")
 			elseif state=="REJECTED" then ui:SetStatus("PLACEMENT REJECTED", "bad") end
 		end
