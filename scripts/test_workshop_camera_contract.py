@@ -39,6 +39,9 @@ require("input", "Enum.KeyCode.F", "F recovery shortcut exists")
 require("input", "callbacks.FrameCamera()", "F routes to FrameCamera")
 require("input", "Enum.KeyCode.V", "free-fly shortcut exists")
 require("input", "callbacks.ToggleFreeFly()", "V routes to free-fly")
+require("input", 'shiftDown(UserInputService) then "Rear" else "Front"', "Shift+Numpad1 exposes rear view")
+require("input", 'shiftDown(UserInputService) then "Left" else "Right"', "Shift+Numpad3 exposes left view")
+require("input", 'shiftDown(UserInputService) then "Bottom" else "Top"', "Shift+Numpad7 exposes bottom view")
 require("bar", '"F FRAME"', "camera bar exposes frame control")
 require("bar", '"ORBIT"', "camera bar exposes orbit mode")
 require("bar", '"FLY [V]"', "camera bar exposes fly mode")
@@ -50,6 +53,7 @@ require("camera", "self._lastPrimaryClickAt", "camera tracks primary-click timin
 require("camera", "function WorkshopCamera:_placementGhostValid", "camera can detect when a valid placement must win")
 require("camera", "if isDoubleClick and not self:_placementGhostValid() then", "component focus never steals a valid placement")
 require("camera", "self:FocusComponent(target)", "double-click routes the hovered component into FocusComponent")
+require("camera", "if self.FreeFly then", "component focus preserves free-fly mode state")
 
 # Workspace remains Studio-owned; CurrentCamera is not synced by Rojo.
 require("project", '"syncCurrentCamera": false', "Rojo keeps CurrentCamera Studio-owned")
