@@ -1,0 +1,156 @@
+--!strict
+-- Canonical client-side quality-of-life manifest. Gameplay authority remains server-side.
+
+local FEATURES = table.freeze({
+	{Id="builder_ctrl_z_undo", Category="Workshop", Label="Ctrl+Z undo alias"},
+	{Id="builder_ctrl_y_redo", Category="Workshop", Label="Ctrl+Y redo alias"},
+	{Id="builder_backspace_remove", Category="Workshop", Label="Backspace removes aimed component"},
+	{Id="builder_ctrl_d_duplicate", Category="Workshop", Label="Ctrl+D duplicate alias"},
+	{Id="builder_shift_r_reverse_rotate", Category="Workshop", Label="Shift+R reverse rotation"},
+	{Id="builder_ctrl_m_mirror", Category="Workshop", Label="Ctrl+M mirror alias"},
+	{Id="builder_ctrl_t_test", Category="Workshop", Label="Ctrl+T test/edit alias"},
+	{Id="builder_escape_close", Category="Workshop", Label="Escape leaves workshop"},
+	{Id="builder_alt_hotbar", Category="Workshop", Label="Alt+1-9 hotbar selection"},
+	{Id="builder_wheel_previous", Category="Workshop", Label="Mouse wheel selects previous slot"},
+	{Id="builder_wheel_next", Category="Workshop", Label="Mouse wheel selects next slot"},
+	{Id="builder_typing_guard", Category="Workshop", Label="Shortcuts ignore focused text boxes"},
+	{Id="builder_repeat_guard", Category="Workshop", Label="Shortcut aliases fire once per begin event"},
+	{Id="workshop_slash_search", Category="Workshop", Label="Slash focuses catalog search"},
+	{Id="workshop_ctrl_f_search", Category="Workshop", Label="Ctrl+F focuses catalog search"},
+	{Id="workshop_escape_clear_search", Category="Workshop", Label="Escape clears search first"},
+	{Id="workshop_home_scroll_top", Category="Workshop", Label="Home jumps catalog to top"},
+	{Id="workshop_end_scroll_bottom", Category="Workshop", Label="End jumps catalog to bottom"},
+	{Id="workshop_tab_next", Category="Workshop", Label="Tab cycles workshop pages"},
+	{Id="workshop_tab_previous", Category="Workshop", Label="Shift+Tab cycles workshop pages backwards"},
+	{Id="workshop_favorites_filter", Category="Workshop", Label="Shift+F filters starred parts"},
+	{Id="workshop_favorites_filter_clear", Category="Workshop", Label="Ctrl+Shift+F clears favorites filter"},
+	{Id="workshop_visible_count", Category="Workshop", Label="Visible component count chip"},
+	{Id="workshop_shortcut_chip", Category="Workshop", Label="Workshop shortcut hint chip"},
+	{Id="workshop_search_state_chip", Category="Workshop", Label="Search/filter state chip"},
+	{Id="swap_mouse4_cycle", Category="QuickSwap", Label="Mouse4 cycles quick vehicle"},
+	{Id="swap_alt_v_cycle", Category="QuickSwap", Label="Alt+V cycles quick vehicle"},
+	{Id="swap_cooldown_progress", Category="QuickSwap", Label="Cooldown progress bar"},
+	{Id="swap_cooldown_seconds", Category="QuickSwap", Label="Precise cooldown seconds"},
+	{Id="swap_ready_pulse", Category="QuickSwap", Label="Ready pulse on cooldown completion"},
+	{Id="swap_active_slot", Category="QuickSwap", Label="Persistent active slot highlight"},
+	{Id="swap_full_name_tooltip", Category="QuickSwap", Label="Full blueprint tooltip"},
+	{Id="swap_empty_warning", Category="QuickSwap", Label="Clear empty slot warning"},
+	{Id="swap_error_humanizer", Category="QuickSwap", Label="Readable swap errors"},
+	{Id="swap_success_toast", Category="QuickSwap", Label="Successful swap toast"},
+	{Id="swap_profile_loading", Category="QuickSwap", Label="Profile loading state"},
+	{Id="swap_slot_count", Category="QuickSwap", Label="Usable quick-slot count"},
+	{Id="swap_safe_area", Category="QuickSwap", Label="Safe-area positioning"},
+	{Id="swap_compact_mode", Category="QuickSwap", Label="Compact quick-swap layout"},
+	{Id="swap_key_hint_toggle", Category="QuickSwap", Label="Quick-swap key hint toggle"},
+	{Id="trade_escape_close", Category="Trade", Label="Escape closes trade console"},
+	{Id="trade_f5_refresh", Category="Trade", Label="F5 refreshes trade overview"},
+	{Id="trade_partner_left", Category="Trade", Label="Left selects previous partner"},
+	{Id="trade_partner_right", Category="Trade", Label="Right selects next partner"},
+	{Id="trade_vehicle_up", Category="Trade", Label="Up selects previous vehicle"},
+	{Id="trade_vehicle_down", Category="Trade", Label="Down selects next vehicle"},
+	{Id="trade_enter_primary", Category="Trade", Label="Enter performs primary trade action"},
+	{Id="trade_countdown_progress", Category="Trade", Label="Test-drive progress bar"},
+	{Id="trade_timer_warn", Category="Trade", Label="Timer warning under 30 seconds"},
+	{Id="trade_timer_danger", Category="Trade", Label="Timer danger under 10 seconds"},
+	{Id="trade_progress_percent", Category="Trade", Label="Test-drive remaining percentage"},
+	{Id="trade_review_banner", Category="Trade", Label="Review decision banner"},
+	{Id="trade_partner_emphasis", Category="Trade", Label="Current partner emphasis"},
+	{Id="trade_acceptance_badge", Category="Trade", Label="Local acceptance badge"},
+	{Id="trade_partner_acceptance_badge", Category="Trade", Label="Partner acceptance badge"},
+	{Id="trade_busy_feedback", Category="Trade", Label="Busy submit feedback"},
+	{Id="trade_network_toast", Category="Trade", Label="Network/server error toast"},
+	{Id="trade_cancel_toast", Category="Trade", Label="Trade cancellation toast"},
+	{Id="trade_complete_toast", Category="Trade", Label="Trade completion toast"},
+	{Id="trade_responsive_layout", Category="Trade", Label="Responsive safe-area trade layout"},
+	{Id="combat_focus_release", Category="Combat", Label="Release controls on focus loss"},
+	{Id="combat_crosshair", Category="Combat", Label="Machine combat crosshair"},
+	{Id="combat_crosshair_size", Category="Combat", Label="Adjustable crosshair size"},
+	{Id="combat_crosshair_opacity", Category="Combat", Label="Adjustable crosshair opacity"},
+	{Id="combat_crosshair_gap", Category="Combat", Label="Adjustable crosshair gap"},
+	{Id="combat_component_highlight", Category="Combat", Label="Aimed component outline"},
+	{Id="combat_mech_highlight", Category="Combat", Label="Aimed mech outline"},
+	{Id="combat_target_chip", Category="Combat", Label="Target identifier chip"},
+	{Id="combat_primary_indicator", Category="Combat", Label="Primary fire input indicator"},
+	{Id="combat_secondary_indicator", Category="Combat", Label="Secondary fire input indicator"},
+	{Id="combat_reload_hint", Category="Combat", Label="Reload key hint"},
+	{Id="combat_utility_hint", Category="Combat", Label="Utility key hint"},
+	{Id="combat_mechanism_hint", Category="Combat", Label="Mechanism key hint"},
+	{Id="combat_control_help", Category="Combat", Label="Togglable control help strip"},
+	{Id="combat_hide_in_builder", Category="Combat", Label="Combat overlay hides in workshop"},
+	{Id="global_command_palette", Category="Accessibility", Label="Ctrl+K command palette"},
+	{Id="global_settings_panel", Category="Accessibility", Label="F10 QoL settings panel"},
+	{Id="access_ui_scale", Category="Accessibility", Label="Adjustable UI scale"},
+	{Id="access_large_text", Category="Accessibility", Label="Large text mode"},
+	{Id="access_high_contrast", Category="Accessibility", Label="High contrast text"},
+	{Id="access_reduced_motion", Category="Accessibility", Label="Reduced optional motion"},
+	{Id="access_hud_opacity", Category="Accessibility", Label="Adjustable HUD opacity"},
+	{Id="access_panel_opacity", Category="Accessibility", Label="Adjustable panel opacity"},
+	{Id="access_safe_margin", Category="Accessibility", Label="Configurable screen-edge safe margin"},
+	{Id="access_compact_hud", Category="Accessibility", Label="Compact HUD spacing"},
+	{Id="access_tooltips", Category="Accessibility", Label="Tooltip toggle"},
+	{Id="access_tooltip_delay", Category="Accessibility", Label="Adjustable tooltip delay"},
+	{Id="access_toast_duration", Category="Accessibility", Label="Adjustable toast duration"},
+	{Id="access_focus_outline", Category="Accessibility", Label="Keyboard/text focus outline"},
+	{Id="access_colorblind_glyphs", Category="Accessibility", Label="Glyphs supplement status colors"},
+	{Id="access_streamer_mode", Category="Accessibility", Label="Abbreviated player/blueprint labels"},
+	{Id="access_performance_mode", Category="Accessibility", Label="Disable optional visual work"},
+	{Id="access_hide_hints", Category="Accessibility", Label="Hide tutorial-style hints"},
+	{Id="access_chip_density", Category="Accessibility", Label="Information chip density"},
+	{Id="access_reset_settings", Category="Accessibility", Label="Reset QoL settings action"},
+	{Id="reliability_singleton_gui", Category="Reliability", Label="Prevent duplicate QoL GUI instances"},
+	{Id="reliability_rebind_ui", Category="Reliability", Label="Rebind recreated game UI"},
+	{Id="reliability_clear_stale_target", Category="Reliability", Label="Clear stale target highlights"},
+	{Id="reliability_global_typing_guard", Category="Reliability", Label="Global shortcuts respect text focus"},
+	{Id="reliability_destroy_cleanup", Category="Reliability", Label="Clean up connections and temporary UI"},
+})
+
+local DEFAULTS = table.freeze({
+	UIScale = 1.0,
+	LargeText = false,
+	HighContrast = false,
+	ReducedMotion = false,
+	HUDOpacity = 1.0,
+	PanelOpacity = 1.0,
+	SafeMargin = 16,
+	CompactHUD = false,
+	Tooltips = true,
+	TooltipDelay = 0.45,
+	ToastDuration = 2.4,
+	FocusOutline = true,
+	ColorblindGlyphs = true,
+	StreamerMode = false,
+	PerformanceMode = false,
+	HideHints = false,
+	ChipDensity = 1,
+	CrosshairSize = 10,
+	CrosshairOpacity = 0.9,
+	CrosshairGap = 5,
+	QuickSwapCompact = false,
+	QuickSwapHints = true,
+	TradeCompact = false,
+	ControlHelp = true,
+})
+
+local byId: {[string]: any} = {}
+for _, feature in ipairs(FEATURES) do
+	byId[feature.Id] = feature
+end
+
+local QoLDefinitions = {
+	Features = FEATURES,
+	Defaults = DEFAULTS,
+}
+
+function QoLDefinitions.GetDefault(key: string): any
+	return DEFAULTS[key]
+end
+
+function QoLDefinitions.GetFeature(id: string): any?
+	return byId[id]
+end
+
+function QoLDefinitions.Count(): number
+	return #FEATURES
+end
+
+return table.freeze(QoLDefinitions)
