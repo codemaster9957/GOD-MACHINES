@@ -129,7 +129,7 @@ end
 function Build:_clearance(definition,transform,exclude)
 	if not definition or typeof(definition.Size)~="Vector3" or typeof(transform)~="CFrame" then return false end
 	local params=OverlapParams.new(); params.FilterType=Enum.RaycastFilterType.Exclude; params.FilterDescendantsInstances=exclude or {}
-	local size=definition.Size; local querySize=Vector3.new(math.max(.01,size.X-.08),math.max(.01,size.Y-.08),math.max(.01,size.Z-.08))
+	local querySize=BuildMath.ClearanceSize(definition.Size)
 	return #Workspace:GetPartBoundsInBox(transform,querySize,params)==0
 end
 function Build:_snapshot(mechId,userId)
@@ -198,7 +198,9 @@ function Build:_place(player,request,appearance)
 	elseif next(mech.Components or {})~=nil then return reject("AttachmentRequired") end
 
 	if typeof(transform)~="CFrame" then return reject("InvalidTransform") end
-	if not self:_clearance(definition,transform) then return reject("Collision") end
+	local exclusions={}
+	if player.Character then table.insert(exclusions,player.Character) end
+	if not self:_clearance(definition,transform,exclusions) then return reject("Collision") end
 	local before=self:_snapshot(mechId,userId)
 	local consumed,receipt=self._inventory:ConsumeOne(userId,partType)
 	if not consumed then return reject(receipt or "InsufficientInventory") end
