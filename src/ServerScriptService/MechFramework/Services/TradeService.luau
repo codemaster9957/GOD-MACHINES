@@ -147,7 +147,6 @@ function Trade:_commit(session: any): (boolean,string?)
 		return false,reasonB or "TradeWriteFailed"
 	end
 
-	-- Flush both loaded save sessions now rather than waiting for autosave.
 	local persistedA = self._save:_save(a,false)
 	local persistedB = self._save:_save(b,false)
 	if not persistedA or not persistedB then
@@ -216,13 +215,14 @@ function Trade:_startTest(player: Player): (boolean,any)
 	self._sessions[session.Id] = started
 	self:_push(started)
 
-	local expected = started
+	local tradeId = started.Id
 	task.delay(Rules.TEST_DRIVE_SECONDS,function()
-		if self._sessions[expected.Id] ~= expected or expected.State ~= "Testing" then return end
-		self:_closeTest(expected,"TradeTestComplete")
-		local review = Rules.Advance(expected,expected.TestEndsAt)
+		local active = self._sessions[tradeId]
+		if not active or active.State ~= "Testing" or active.TestMatchId ~= matchId then return end
+		self:_closeTest(active,"TradeTestComplete")
+		local review = Rules.Advance(active,tonumber(active.TestEndsAt) or os.clock())
 		review.TestMatchId = nil
-		self._sessions[expected.Id] = review
+		self._sessions[tradeId] = review
 		self:_push(review)
 	end)
 	return true,self:_public(started,player.UserId)
