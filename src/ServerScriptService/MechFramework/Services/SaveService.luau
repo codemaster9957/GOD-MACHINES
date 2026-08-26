@@ -8,9 +8,10 @@ local RunService=game:GetService("RunService")
 local HttpService=game:GetService("HttpService")
 local ReplicatedStorage=game:GetService("ReplicatedStorage")
 local Config=require(ReplicatedStorage.MechFramework.Shared.FrameworkConfig)
+local QuickSwapRules=require(ReplicatedStorage.MechFramework.Shared.QuickSwapRules)
 local store=DataStoreService:GetDataStore(Config.SaveKey)
 
-local Save:any={_migrations={},_inventory=nil,_sessions={},_blueprints={},_closing=false}
+local Save:any={_migrations={},_inventory=nil,_sessions={},_blueprints={},_quickSwapSlots={},_closing=false}
 local SESSION_TIMEOUT=180
 local AUTOSAVE_SECONDS=60
 local MAX_ATTEMPTS=5
@@ -92,7 +93,7 @@ function Save:Migrate(record:any):any
 	return record
 end
 function Save:BuildPlayerRecord(userId:number):any
-	return {SchemaVersion=Config.SchemaVersion,UserId=userId,Inventory=self._inventory:Snapshot(userId),Blueprints=clone(self._blueprints[userId] or {}),SavedAt=os.time()}
+	return {SchemaVersion=Config.SchemaVersion,UserId=userId,Inventory=self._inventory:Snapshot(userId),Blueprints=clone(self._blueprints[userId] or {}),QuickSwapSlots=QuickSwapRules.NormalizeSlots(self._quickSwapSlots[userId]),SavedAt=os.time()}
 end
 function Save:GetBlueprint(userId:number,blueprintId:string):any?
 	local owned=self._blueprints[userId]; local blueprint=owned and owned[blueprintId]; return blueprint and clone(blueprint) or nil
@@ -117,15 +118,31 @@ function Save:SetBlueprint(userId:number,blueprintId:string,blueprint:any):(bool
 	if bytes>MAX_BLUEPRINT_STORAGE_BYTES then return false,"BlueprintStorageFull" end
 	owned[name]=stored; return true,nil
 end
+function Save:GetQuickSwapSlots(userId:number):{[number]:string}
+	return QuickSwapRules.NormalizeSlots(self._quickSwapSlots[userId])
+end
+function Save:SetQuickSwapSlot(userId:number,slot:number,blueprintName:any):(boolean,any)
+	local ok,result=QuickSwapRules.AssignSlot(self._quickSwapSlots[userId],slot,blueprintName)
+	if not ok then return false,result end
+	local assigned=result[slot]
+	if assigned and not self:GetBlueprint(userId,assigned) then return false,"BlueprintNotFound" end
+	self._quickSwapSlots[userId]=result
+	return true,self:GetQuickSwapSlots(userId)
+end
 function Save:DeleteBlueprint(userId:number,blueprintId:string):boolean
-	local owned=self._blueprints[userId]; if not owned or owned[blueprintId]==nil then return false end; owned[blueprintId]=nil; return true
+	local owned=self._blueprints[userId]; if not owned or owned[blueprintId]==nil then return false end
+	owned[blueprintId]=nil
+	local slots=self:GetQuickSwapSlots(userId)
+	for slot=1,QuickSwapRules.MaxSlots do if slots[slot]==blueprintId then slots[slot]=nil end end
+	self._quickSwapSlots[userId]=slots
+	return true
 end
 function Save:_grantStudioBuildInventory(userId:number)
 	if RunService:IsStudio() and Config.Debug then self._inventory:EnsureStudioBuildInventory(userId) end
 end
 function Save:_loadStudio(player:Player)
 	local userId=player.UserId; if self._sessions[userId] then player:SetAttribute("GMProfileReady",true); return end
-	self._sessions[userId]={Id="StudioLocal:"..tostring(userId),Key="",LastSave=os.clock(),LocalOnly=true}; self._inventory:Restore(userId,{}); self._blueprints[userId]={}
+	self._sessions[userId]={Id="StudioLocal:"..tostring(userId),Key="",LastSave=os.clock(),LocalOnly=true}; self._inventory:Restore(userId,{}); self._blueprints[userId]={}; self._quickSwapSlots[userId]={}
 	self:_grantStudioBuildInventory(userId); player:SetAttribute("GMProfileReady",true); print("[MechFramework] Studio local save session ready",userId)
 end
 
@@ -147,7 +164,7 @@ function Save:_load(player:Player)
 	local sessionId=HttpService:GenerateGUID(false); local key="Player_"..userId; local now=os.time(); local acquired=false
 	local ok,record=retry(function()
 		return store:UpdateAsync(key,function(old:any)
-			old=if type(old)=="table" then old else {SchemaVersion=Config.SchemaVersion,UserId=userId,Inventory={},Blueprints={}}
+			old=if type(old)=="table" then old else {SchemaVersion=Config.SchemaVersion,UserId=userId,Inventory={},Blueprints={},QuickSwapSlots={}}
 			local session=old.Session; if session and session.Id~=sessionId and now-(tonumber(session.Heartbeat) or now)<SESSION_TIMEOUT then return nil end
 			old.Session={Id=sessionId,Heartbeat=now}; acquired=true; return old
 		end)
@@ -169,10 +186,10 @@ function Save:_load(player:Player)
 	end
 	record=migratedRecord
 	self._sessions[userId]={Id=sessionId,Key=key,LastSave=os.clock(),LocalOnly=false}
-	self._inventory:Restore(userId,record.Inventory or {}); self._blueprints[userId]=clone(record.Blueprints or {})
+	self._inventory:Restore(userId,record.Inventory or {}); self._blueprints[userId]=clone(record.Blueprints or {}); self._quickSwapSlots[userId]=QuickSwapRules.NormalizeSlots(record.QuickSwapSlots)
 	player:SetAttribute("GMProfileReady",true)
 end
-function Save:_releaseLocal(userId:number) self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end
+function Save:_releaseLocal(userId:number) self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil; self._quickSwapSlots[userId]=nil end
 function Save:_save(userId:number,release:boolean):boolean
 	local session=self._sessions[userId]; if not session then return true end
 	if session.LocalOnly==true then session.LastSave=os.clock(); if release then self:_releaseLocal(userId) end; return true end
@@ -195,7 +212,7 @@ function Save:_save(userId:number,release:boolean):boolean
 	else
 		warn("[MechFramework] Save failed",userId,result)
 	end
-	if release and committed then self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil end
+	if release and committed then self._sessions[userId]=nil; self._inventory:RemovePlayer(userId); self._blueprints[userId]=nil; self._quickSwapSlots[userId]=nil end
 	return committed
 end
 function Save:Start()

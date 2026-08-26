@@ -4,6 +4,7 @@
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local CombatMath = require(game.ReplicatedStorage.MechFramework.Shared.CombatMath)
 
 type ProjectileData = {
 	Position: Vector3,
@@ -46,6 +47,7 @@ local function getIgnoreList(context: any): {Instance}
 end
 
 local function damageType(config: any): string
+	if type(config.DamageType)=="string" and config.DamageType~="" then return config.DamageType end
 	local category=tostring(config.Category or "")
 	local mode=tostring(config.Mode or "")
 	if mode=="Melee" then return "Melee" end
@@ -76,7 +78,7 @@ function Projectile:_apply(hit: RaycastResult, config: any, context: any)
 	overlap.FilterType=Enum.RaycastFilterType.Exclude
 	overlap.FilterDescendantsInstances=getIgnoreList(context)
 	local seen: {[string]: boolean} = {}
-	if directKey then seen[directKey]=true end -- direct impact already received full damage
+	if directKey then seen[directKey]=true end
 
 	for _,part in ipairs(Workspace:GetPartBoundsInRadius(hit.Position,radius,overlap)) do
 		local targetMech,targetComponent=componentFrom(part)
@@ -85,7 +87,7 @@ function Projectile:_apply(hit: RaycastResult, config: any, context: any)
 		if seen[key] then continue end
 		seen[key]=true
 		local distance=(part.Position-hit.Position).Magnitude
-		local falloff=1-math.clamp(distance/radius,0,1)
+		local falloff=CombatMath.Falloff(distance,radius)
 		local amount=damage*falloff
 		if amount>0 then
 			self._damage:Apply(targetMech,targetComponent,amount,{
@@ -121,14 +123,6 @@ function Projectile:_cast(origin: Vector3, direction: Vector3, distance: number,
 	return true
 end
 
-local function spreadDirection(direction: Vector3, spreadRadians: number): Vector3
-	if spreadRadians<=0 then return direction.Unit end
-	local base=CFrame.lookAt(Vector3.zero,direction.Unit)
-	local pitch=(math.random()-.5)*spreadRadians
-	local yaw=(math.random()-.5)*spreadRadians
-	return (base*CFrame.Angles(pitch,yaw,0)).LookVector
-end
-
 function Projectile:_acquireGuidedTarget(origin: Vector3, direction: Vector3, range: number, context: any): BasePart?
 	local params=RaycastParams.new()
 	params.FilterType=Enum.RaycastFilterType.Exclude
@@ -157,14 +151,15 @@ local function steerToward(current: Vector3, desired: Vector3, maxRadians: numbe
 end
 
 function Projectile:Fire(origin: Vector3, direction: Vector3, config: any, context: any): boolean
-	if direction.Magnitude<.9 then return false end
+	if not CombatMath.IsFiniteVector(direction) or direction.Magnitude<.9 then return false end
 	local pellets=math.clamp(math.floor(tonumber(config.Pellets) or 1),1,64)
-	local spread=math.rad(tonumber(config.Spread) or 0)
+	local spread=math.max(0,tonumber(config.Spread) or 0)
 	local range=math.max(0,tonumber(config.Range) or 1000)
 	if range<=0 then return false end
+	local baseSeed=math.floor(tonumber(context and context.ShotSeed) or self._nextId+1)
 
-	for _=1,pellets do
-		local dir=spreadDirection(direction,spread)
+	for pellet=1,pellets do
+		local dir=CombatMath.SpreadDirection(direction,spread,baseSeed+pellet*104729)
 		local mode=tostring(config.Mode or "Projectile")
 		if mode=="Hitscan" or mode=="Melee" or mode=="Stream" then
 			self:_cast(origin,dir,range,config,context)
@@ -192,7 +187,7 @@ function Projectile:Start()
 			if tostring(projectile.Config.Mode)=="Guided" and projectile.Target and projectile.Target.Parent then
 				local desired=projectile.Target.Position-projectile.Position
 				if desired.Magnitude>.2 then
-					local degreesPerSecond=math.max(15,tonumber(projectile.Config.GuidedTurnRate) or 135)
+					local degreesPerSecond=math.max(15,tonumber(projectile.Config.GuidedTurnRate) or tonumber(projectile.Config.SeekerStrength) or 135)
 					projectile.Velocity=steerToward(projectile.Velocity,desired,math.rad(degreesPerSecond)*dt)
 				end
 			else

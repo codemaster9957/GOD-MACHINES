@@ -692,9 +692,23 @@ function BuildUI.new(playerGui, callbacks)
 	deleteBlueprint.MouseButton1Click:Connect(function()
 		if self.Callbacks.DeleteBlueprint then self.Callbacks.DeleteBlueprint(blueprintName.Text) end
 	end)
+	local quickCaption = label(blueprintPage, "ASSIGN SELECTED VEHICLE TO QUICK SLOT", 7, true)
+	quickCaption.Position = UDim2.fromOffset(0, 151)
+	quickCaption.Size = UDim2.new(1, 0, 0, 14)
+	quickCaption.TextColor3 = COLORS.Dim
+	self.QuickSwapButtons = {}
+	for slot=1,3 do
+		local quickButton = button(blueprintPage, "Q"..slot.."  EMPTY", 90, 26)
+		quickButton.Position = UDim2.new((slot-1)/3, if slot==1 then 0 elseif slot==2 then 3 else 6, 0, 168)
+		quickButton.Size = UDim2.new(1/3, -6, 0, 26)
+		quickButton.MouseButton1Click:Connect(function()
+			if self.Callbacks.AssignQuickSlot then self.Callbacks.AssignQuickSlot(slot, blueprintName.Text) end
+		end)
+		self.QuickSwapButtons[slot]=quickButton
+	end
 	local blueprintList = Instance.new("ScrollingFrame")
-	blueprintList.Position = UDim2.fromOffset(0, 157)
-	blueprintList.Size = UDim2.new(1, 0, 1, -157)
+	blueprintList.Position = UDim2.fromOffset(0, 201)
+	blueprintList.Size = UDim2.new(1, 0, 1, -201)
 	blueprintList.BackgroundColor3 = COLORS.Void
 	blueprintList.BackgroundTransparency = 0.3
 	blueprintList.BorderSizePixel = 0
@@ -1180,6 +1194,17 @@ function BuildUI:SetEngineeringSummary(summary)
 	setTelemetry(self.EngineeringCards.THERMAL, string.format("%.1f / %.1f", heat, cooling), "HEAT / COOL", if heat > cooling and heat > 0 then "warn" elseif cooling > 0 then "good" else nil)
 	local fuelTone = if thrust > 0 and fuel <= 0 then "bad" elseif fuel > 0 then "blue" else nil
 	setTelemetry(self.EngineeringCards.FUEL, string.format("%.0f", fuel), if thrust > 0 then string.format("THRUST %.0f", thrust) else "NO FUEL LOAD", fuelTone)
+end
+
+function BuildUI:SetQuickSwapSlots(slots)
+	self.QuickSwapSlots=slots or {}
+	for slot=1,3 do
+		local name=self.QuickSwapSlots[slot]
+		local display=if type(name)=="string" and name~="" then string.upper(name) else "EMPTY"
+		if #display>10 then display=display:sub(1,9).."…" end
+		local button=self.QuickSwapButtons and self.QuickSwapButtons[slot]
+		if button then button.Text="Q"..slot.."  "..display; button:SetAttribute("Selected",name~=nil); applyButtonVisual(button) end
+	end
 end
 
 function BuildUI:SetBlueprints(entries)

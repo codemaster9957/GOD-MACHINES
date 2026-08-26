@@ -1,9 +1,10 @@
 --!strict
--- Unified keyboard/mouse adapter for GOD MACHINES abstract control actions.
--- Physical inputs can dispatch multiple semantic actions; only components bound to an action react.
+-- Unified keyboard/mouse adapter with continuous server aim refresh while firing.
+-- Clients submit intent + canonical target IDs; the server resolves target motion and damage.
 
 local Players = game:GetService("Players")
 local ContextActionService = game:GetService("ContextActionService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local remote = game.ReplicatedStorage.MechFramework.Remotes.Events.RequestControlAction
@@ -12,17 +13,16 @@ assert(remote:IsA("RemoteEvent"), "[GOD MACHINES] RequestControlAction must be R
 local sequence = 0
 local heldActions: {[string]: boolean} = {}
 local heldPhysical: {[string]: {string}} = {}
+local lastAimRefresh = 0
+local AIM_REFRESH_RATE = 1/30
 
 local PHYSICAL_BINDINGS = {
 	{ Name="Primary", Inputs={Enum.UserInputType.MouseButton1}, Actions={"Primary"} },
 	{ Name="Secondary", Inputs={Enum.UserInputType.MouseButton2}, Actions={"Secondary"} },
 	{ Name="Forward", Inputs={Enum.KeyCode.W}, Actions={"ThrottleForward"} },
 	{ Name="Reverse", Inputs={Enum.KeyCode.S}, Actions={"ThrottleReverse"} },
-	-- A/D simultaneously express car steering, aircraft roll and omni-wheel strafe.
-	-- The server's generated/custom groups decide which components actually react.
 	{ Name="Left", Inputs={Enum.KeyCode.A}, Actions={"SteerLeft","RollLeft","StrafeLeft"} },
 	{ Name="Right", Inputs={Enum.KeyCode.D}, Actions={"SteerRight","RollRight","StrafeRight"} },
-	-- Space serves car brakes and lift simultaneously; only bound components react.
 	{ Name="BrakeRise", Inputs={Enum.KeyCode.Space}, Actions={"Brake","VerticalUp"} },
 	{ Name="Descend", Inputs={Enum.KeyCode.LeftControl}, Actions={"VerticalDown"} },
 	{ Name="PitchUp", Inputs={Enum.KeyCode.Up}, Actions={"PitchUp"} },
@@ -35,6 +35,17 @@ local PHYSICAL_BINDINGS = {
 	{ Name="Mechanism2", Inputs={Enum.KeyCode.Two}, Actions={"Mechanism2"} },
 }
 
+local function targetIds(instance: Instance?): (string?,string?)
+	local current=instance
+	while current do
+		local mechId=current:GetAttribute("MechId")
+		local componentId=current:GetAttribute("ComponentId")
+		if type(mechId)=="string" and type(componentId)=="string" then return mechId,componentId end
+		current=current.Parent
+	end
+	return nil,nil
+end
+
 local function aimPacket(): {[string]: any}
 	local mouse = player:GetMouse()
 	local camera = workspace.CurrentCamera
@@ -43,8 +54,14 @@ local function aimPacket(): {[string]: any}
 	local direction: Vector3
 	if offset.Magnitude > 0.001 then direction = offset.Unit
 	elseif camera then direction = camera.CFrame.LookVector
-	else direction = mouse.UnitRay.Direction end
-	return { Origin=origin, Direction=direction }
+	else direction = mouse.UnitRay.Direction.Unit end
+	local targetMechId,targetComponentId=targetIds(mouse.Target)
+	return {
+		Origin=origin,
+		Direction=direction,
+		TargetMechId=targetMechId,
+		TargetComponentId=targetComponentId,
+	}
 end
 
 local function dispatch(action: string, active: boolean)
@@ -103,6 +120,16 @@ for _, binding in ipairs(PHYSICAL_BINDINGS) do
 		table.unpack(binding.Inputs)
 	)
 end
+
+-- Primary/secondary are special: update the held server state as the cursor moves.
+-- CanFire remains authoritative, so this cannot bypass weapon fire rates.
+RunService.RenderStepped:Connect(function()
+	local now=os.clock()
+	if now-lastAimRefresh<AIM_REFRESH_RATE then return end
+	lastAimRefresh=now
+	if heldActions.Primary then dispatch("Primary",true) end
+	if heldActions.Secondary then dispatch("Secondary",true) end
+end)
 
 script.Destroying:Connect(function()
 	releaseHeldActions()

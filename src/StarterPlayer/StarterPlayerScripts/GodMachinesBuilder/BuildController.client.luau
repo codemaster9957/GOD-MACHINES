@@ -342,6 +342,33 @@ local function selectSlot(slot)
 	if partId then selectPart(partId) end
 end
 
+local playerScripts=player:WaitForChild("PlayerScripts")
+local quickSwapBridge=playerScripts:FindFirstChild("GMQuickSwapSlotsChanged")
+if not quickSwapBridge then quickSwapBridge=Instance.new("BindableEvent"); quickSwapBridge.Name="GMQuickSwapSlotsChanged"; quickSwapBridge.Parent=playerScripts end
+
+local function refreshQuickSlots(silent)
+	if not profileReady() or framework:GetAttribute("MachineServerReady")~=true then return false end
+	local success,result=machineInvoke({Action="GetQuickSwapSlots"},6)
+	if success and type(result)=="table" then
+		ui:SetQuickSwapSlots(result)
+		;(quickSwapBridge::BindableEvent):Fire(result)
+		return true
+	end
+	if not silent then status(result or "QUICK SLOT REFRESH FAILED","bad",1) end
+	return false
+end
+
+local function assignQuickSlot(slot,name)
+	if not profileReady() then status("PROFILE LOADING — PLEASE WAIT","blue",1); return end
+	name=tostring(name or ""):match("^%s*(.-)%s*$")
+	local success,result=machineInvoke({Action="SetQuickSwapSlot",Slot=slot,Name=name},6)
+	if success and type(result)=="table" then
+		ui:SetQuickSwapSlots(result)
+		;(quickSwapBridge::BindableEvent):Fire(result)
+		status(if name=="" then "QUICK SLOT "..slot.." CLEARED" else "QUICK SLOT "..slot..": "..name,"good",1)
+	else status(result or "QUICK SLOT UPDATE FAILED","bad",1) end
+end
+
 local function refreshBlueprints(silent)
 	if not profileReady() then
 		if not silent then status("PROFILE LOADING — BLUEPRINTS WILL APPEAR AUTOMATICALLY", "blue", 1.2) end
@@ -369,6 +396,7 @@ local function saveBlueprint(name)
 	if success then
 		status("BLUEPRINT SAVED: " .. name, "good", 1)
 		refreshBlueprints(true)
+		refreshQuickSlots(true)
 	else
 		status(result or "BLUEPRINT SAVE FAILED", "bad", 1.2)
 	end
@@ -401,6 +429,7 @@ local function deleteBlueprint(name)
 	if success then
 		status("BLUEPRINT DELETED: " .. name, "good", .9)
 		refreshBlueprints(true)
+		refreshQuickSlots(true)
 	else
 		status(result or "BLUEPRINT DELETE FAILED", "bad", 1)
 	end
@@ -452,7 +481,7 @@ end
 local function updateMachineReady()
 	local ready = framework:GetAttribute("MachineServerReady") == true
 	ui:SetMachineReady(ready)
-	if ready and profileReady() then refreshBlueprints(true) end
+	if ready and profileReady() then refreshBlueprints(true); refreshQuickSlots(true) end
 end
 
 ui.Callbacks.SelectPart = selectPart
@@ -468,6 +497,7 @@ ui.Callbacks.SaveBlueprint = saveBlueprint
 ui.Callbacks.LoadBlueprint = loadBlueprint
 ui.Callbacks.RefreshBlueprints = function() refreshBlueprints(false) end
 ui.Callbacks.DeleteBlueprint = deleteBlueprint
+ui.Callbacks.AssignQuickSlot = assignQuickSlot
 ui.Callbacks.BindTarget = bindTarget
 ui.Callbacks.AutoBindings = autoBindings
 ui:SetCatalog(catalog, categories)
@@ -476,6 +506,7 @@ ui:SetMode("Edit")
 ui:SetMachineReady(false)
 ui:SetMirrorState(false)
 ui:SetBlueprints({})
+ui:SetQuickSwapSlots({})
 
 input = BuildInput.new(UserInputService, {
 	Toggle=toggleBuildMode, Rotate=rotate, Mirror=mirror, Place=placePart, Remove=removePart,
@@ -497,10 +528,11 @@ end)
 player:GetAttributeChangedSignal("GMProfileReady"):Connect(function()
 	if profileReady() then
 		task.spawn(function() refreshInventory(true) end)
-		if framework:GetAttribute("MachineServerReady") == true then task.spawn(function() refreshBlueprints(true) end) end
+		if framework:GetAttribute("MachineServerReady") == true then task.spawn(function() refreshBlueprints(true); refreshQuickSlots(true) end) end
 		if buildMode then status("PROFILE READY — WORKSHOP INVENTORY LOADED", "good", .8) end
 	else
 		ui:SetBlueprints({})
+		ui:SetQuickSwapSlots({})
 	end
 end)
 
@@ -520,7 +552,7 @@ end)
 task.spawn(function()
 	local ready = waitForReady("MachineServerReady", 12)
 	updateMachineReady()
-	if ready and profileReady() then refreshBlueprints(true) end
+	if ready and profileReady() then refreshBlueprints(true); refreshQuickSlots(true) end
 end)
 
 local renderConnection = RunService.RenderStepped:Connect(function()

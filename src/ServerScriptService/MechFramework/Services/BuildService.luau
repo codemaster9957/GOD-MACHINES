@@ -459,10 +459,50 @@ function Build:SpawnBlueprint(ownerId,blueprint,spawnCFrame,metadata)
 		if socketA then nodesA[socketA].OccupiedBy=b end; if socketB then nodesB[socketB].OccupiedBy=a end
 	end
 
-	local model=self:_model(mechId); model:SetAttribute("BattleSpawn",metadata and metadata.BattleSpawn==true or false); model:SetAttribute("EditMode",not (metadata and metadata.BattleSpawn==true))
+	local model=self:_model(mechId); model:SetAttribute("BattleSpawn",metadata and metadata.BattleSpawn==true or false); model:SetAttribute("EditMode",not (metadata and (metadata.BattleSpawn==true or metadata.Playing==true)))
 	model:SetAttribute("BlueprintId",tostring(blueprint.Id or blueprint.Name or "SavedBlueprint")); self:_realize(mechId)
 	if metadata then for key,value in pairs(metadata) do if key~="ConsumeInventory" and type(key)=="string" and (type(value)=="string" or type(value)=="number" or type(value)=="boolean") then model:SetAttribute(key,value) end end end
 	return true,mechId
+end
+
+function Build:ReplaceBlueprint(ownerId,currentMechId,blueprint,spawnCFrame,metadata)
+	if type(ownerId)~="number" or type(currentMechId)~="string" or typeof(spawnCFrame)~="CFrame" then return false,"InvalidQuickSwap" end
+	if not self._mechs:IsOwner(ownerId,currentMechId) then return false,"NotAuthorized" end
+	local mech=self._mechs:Get(currentMechId); local oldModel=Workspace:FindFirstChild("MechAssemblies")
+	oldModel=oldModel and oldModel:FindFirstChild(currentMechId)
+	if not mech or not oldModel or not oldModel:IsA("Model") then return false,"MachineNotReady" end
+	local before=self:_snapshot(currentMechId,ownerId); if not before then return false,"MachineNotReady" end
+	local attributes=oldModel:GetAttributes()
+
+	-- Return the live machine first, then reserve the target from that combined inventory.
+	-- Any failure restores the exact inventory snapshot and re-realizes the original graph.
+	for _,componentId in ipairs(sortedKeys(mech.Components)) do
+		local component=mech.Components[componentId]
+		local maxHealth=math.max(1,tonumber(component.MaxHealth) or 1)
+		local condition=math.clamp((tonumber(component.Health) or maxHealth)/maxHealth,0,1)
+		local receipt=component.Metadata and component.Metadata.InventoryReceipt
+		if not self._inventory:ReturnBuiltPart(ownerId,component.PartType,receipt,condition) then
+			self._inventory:Restore(ownerId,before.Inventory or {})
+			return false,"InventoryReturnFailed"
+		end
+	end
+
+	self:_destroyRealized(currentMechId)
+	local spawnMetadata=clone(metadata or {})
+	spawnMetadata.ConsumeInventory=true
+	spawnMetadata.Playing=true
+	local ok,result=self:SpawnBlueprint(ownerId,blueprint,spawnCFrame,spawnMetadata)
+	if not ok then
+		self._inventory:Restore(ownerId,before.Inventory or {})
+		local restored=self:_model(currentMechId)
+		for name,value in pairs(attributes) do restored:SetAttribute(name,value) end
+		self:_restore(currentMechId,before,ownerId)
+		return false,result
+	end
+
+	self._mechs:Destroy(currentMechId)
+	self._physics:MarkDirty(currentMechId)
+	return true,result
 end
 
 return Build

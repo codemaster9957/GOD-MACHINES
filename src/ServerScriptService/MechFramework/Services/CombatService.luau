@@ -1,15 +1,18 @@
 --!strict
--- Server-authoritative weapon validation, shared machine ammunition, power, heat, projectiles and recoil.
+-- Server-authoritative weapon validation, focused aiming, bloom, ammunition, power, heat, projectiles and recoil.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local Definitions = require(ReplicatedStorage.MechFramework.Shared.WeaponDefinitions)
+local CombatMath = require(ReplicatedStorage.MechFramework.Shared.CombatMath)
 
 type NumberMap = {[string]: number}
 
 local Combat: any = {
 	_lastFire = {} :: NumberMap,
 	_ammo = {} :: NumberMap,
+	_bloom = {} :: NumberMap,
+	_shotSequence = {} :: NumberMap,
 	_mechs = nil,
 	_heat = nil,
 	_power = nil,
@@ -58,6 +61,20 @@ function Combat:_ammoState(mechId: string): number
 	return self._ammo[mechId]
 end
 
+function Combat:_targetMotion(aim: any): (Vector3?, Vector3?)
+	if type(aim) ~= "table" or type(aim.TargetMechId) ~= "string" or type(aim.TargetComponentId) ~= "string" then return nil,nil end
+	local target = self:_part(aim.TargetMechId,aim.TargetComponentId)
+	if not target then return nil,nil end
+	return target.Position,target.AssemblyLinearVelocity
+end
+
+function Combat:_bloomFor(weaponId: string, config: any, now: number): number
+	local current = math.max(0,tonumber(self._bloom[weaponId]) or 0)
+	local last = self._lastFire[weaponId]
+	if last then current = math.max(0,current-math.max(0,tonumber(config.BloomRecovery) or 0)*(now-last)) end
+	return math.min(math.max(0,tonumber(config.MaxBloom) or 0),current)
+end
+
 function Combat:CanFire(userId: number, mechId: string, weaponId: string): (boolean, string?)
 	local mech = self._mechs:Get(mechId)
 	if not mech or mech.Owner ~= userId then return false, "NotAuthorized" end
@@ -71,8 +88,6 @@ function Combat:CanFire(userId: number, mechId: string, weaponId: string): (bool
 	local fireRate = math.max(tonumber(config.FireRate) or 1, .01)
 	if os.clock() - (self._lastFire[weaponId] or -math.huge) < 1 / fireRate then return false, "Cooldown" end
 
-	-- Power.Demand is continuous standby machinery. RequiredPower is peak firing output.
-	-- Only the difference is requested as burst bus headroom; otherwise energy weapons pay twice.
 	local requiredPower = math.max(0, tonumber(config.RequiredPower) or 0)
 	if requiredPower > 0 then
 		local standbyDemand = math.max(0, tonumber(weapon.Power and weapon.Power.Demand) or 0)
@@ -101,16 +116,26 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 	if not model then return false, "NoPhysicalWeapon" end
 
 	local forward = part.CFrame.LookVector
-	local direction = forward
-	if type(aim) == "table" and typeof(aim.Direction) == "Vector3" and aim.Direction.Magnitude > .9 then
-		local requested = aim.Direction.Unit
-		local maxArc = math.rad(math.clamp(tonumber(config.TurnSpeed) or 0, 0, 180))
-		if maxArc > 0 and math.acos(math.clamp(forward:Dot(requested), -1, 1)) <= maxArc then direction = requested end
-	end
+	local requested = forward
+	if type(aim) == "table" and CombatMath.IsFiniteVector(aim.Direction) and aim.Direction.Magnitude > .9 then requested = aim.Direction.Unit end
 	local origin = part.Position + forward * (math.max(part.Size.Z, part.Size.X, part.Size.Y) * .5 + .2)
 
-	-- RequiredPower is a bus/output gate. EnergyUsage is finite per-shot energy and therefore
-	-- drains actual batteries/capacitors atomically; repeated shots cannot reuse the same charge.
+	-- For slower physical projectiles, lead only a target the server can resolve from canonical mech/component IDs.
+	local mode = tostring(config.Mode or "Projectile")
+	if mode ~= "Hitscan" and mode ~= "Melee" and mode ~= "Stream" then
+		local targetPosition,targetVelocity = self:_targetMotion(aim)
+		if targetPosition and targetVelocity then
+			local lead = CombatMath.InterceptDirection(origin,targetPosition,targetVelocity,math.max(1,tonumber(config.ProjectileSpeed) or 500))
+			if lead then requested = lead end
+		end
+	end
+
+	-- Yaw/pitch arcs focus fire toward the cursor while keeping fixed/limited mounts believable.
+	local direction = CombatMath.ClampDirection(part.CFrame,requested,tonumber(config.YawArc) or 180,tonumber(config.PitchArc) or 90)
+	local now = os.clock()
+	local bloom = self:_bloomFor(weaponId,config,now)
+	config.Spread = math.max(0,tonumber(config.Spread) or 0) + bloom
+
 	local energyUsage = math.max(0, tonumber(config.EnergyUsage) or 0)
 	if energyUsage > 0 then
 		local supplied, powerReason = self._power:ConsumeEnergy(mechId, weaponId, energyUsage, false)
@@ -119,11 +144,16 @@ function Combat:Fire(userId: number, mechId: string, weaponId: string, aim: any)
 
 	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
 	if ammoUsage > 0 then self._ammo[mechId] = math.max(0, self:_ammoState(mechId) - ammoUsage) end
-	self._lastFire[weaponId] = os.clock()
+	self._lastFire[weaponId] = now
+	self._bloom[weaponId] = math.min(math.max(0,tonumber(config.MaxBloom) or 0),bloom+math.max(0,tonumber(config.BloomPerShot) or 0))
+	self._shotSequence[weaponId] = (self._shotSequence[weaponId] or 0) + 1
 
 	local heatGenerated = math.max(0, tonumber(config.HeatGenerated) or 0)
 	if heatGenerated > 0 then self._heat:AddHeat(mechId, weaponId, heatGenerated) end
-	local projectileSuccess = self._projectiles:Fire(origin, direction, config, {MechId=mechId, WeaponId=weaponId, UserId=userId, Ignore=model})
+	local projectileSuccess = self._projectiles:Fire(origin, direction, config, {
+		MechId=mechId, WeaponId=weaponId, UserId=userId, Ignore=model,
+		ShotSeed=self._shotSequence[weaponId] + userId*7919,
+	})
 	if projectileSuccess == false then return false, "ProjectileRejected" end
 
 	local recoil = math.max(0, tonumber(config.Recoil) or 0)
@@ -148,7 +178,7 @@ function Combat:DebugWeapon(mechId: string, weaponId: string): any
 	if not weapon or weapon.Combat == nil then return nil end
 	local ammo, capacity = self:GetAmmo(mechId)
 	return {
-		Config=Definitions.Resolve(weapon.Combat), Ammo=ammo, AmmoCapacity=capacity,
+		Config=Definitions.Resolve(weapon.Combat), Ammo=ammo, AmmoCapacity=capacity, Bloom=self._bloom[weaponId] or 0,
 		LastFire=self._lastFire[weaponId], Power=self._power:GetPowerState(mechId, weaponId),
 		Temperature=self._heat:GetTemperature(mechId, weaponId),
 	}
