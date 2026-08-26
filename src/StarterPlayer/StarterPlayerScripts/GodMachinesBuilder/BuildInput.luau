@@ -86,6 +86,8 @@ function BuildInput.new(UserInputService, callbacks)
 	self._wheelConnection = UserInputService.InputChanged:Connect(function(input, processed)
 		if processed or not self.Active or UserInputService:GetFocusedTextBox() then return end
 		if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+		-- The Workshop camera owns ordinary wheel input for zoom while it is active.
+		if UserInputService:GetAttribute("GMWorkshopCameraOwnsWheel") == true then return end
 		local direction = input.Position.Z
 		if direction == 0 then return end
 		local delta = if direction > 0 then -1 else 1
