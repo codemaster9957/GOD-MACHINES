@@ -1,8 +1,8 @@
 --!strict
--- Immutable server registry backed by the shared 100-part public catalog.
+-- Immutable server registry backed by the shared 100+ part public catalog.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local PartCatalog = require(ReplicatedStorage.MechFramework.Shared.PartCatalog)
+local PartCatalog = require(ReplicatedStorage.MechFramework.Shared.PartCatalogExtended)
 
 local LEGACY_ALIASES = table.freeze({
 	LightweightEngine = "SmallCombustionEngine",
@@ -89,7 +89,7 @@ function Registry:Init()
 	local valid, reason = PartCatalog.Validate()
 	assert(valid, "[PartRegistry] Shared PartCatalog invalid: " .. tostring(reason))
 	for _, definition in ipairs(PartCatalog.GetList()) do self:Register(definition.Id, definition) end
-	assert(self:Count() == 100, string.format("[PartRegistry] Expected 100 registered parts, got %d", self:Count()))
+	assert(self:Count() >= 100, string.format("[PartRegistry] Expected at least 100 registered parts, got %d", self:Count()))
 	for legacy, canonical in pairs(LEGACY_ALIASES) do
 		assert(self._definitions[canonical] ~= nil, string.format("[PartRegistry] Legacy alias %s points to missing %s", legacy, canonical))
 	end
