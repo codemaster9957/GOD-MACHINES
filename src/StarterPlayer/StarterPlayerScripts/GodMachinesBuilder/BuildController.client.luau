@@ -33,7 +33,7 @@ assert(machineRemote:IsA("RemoteFunction"), "RequestMachineAction must be Remote
 local catalog = PartCatalog.GetList()
 local definitions = PartCatalog.GetAll()
 local categories = PartCatalog.GetCategories()
-assert(#catalog == 100, "[GOD MACHINES] Expected 100 public catalog parts")
+assert(#catalog >= 100, "[GOD MACHINES] Expected at least 100 public catalog parts")
 
 local buildMode = false
 local machineMode = "Edit"

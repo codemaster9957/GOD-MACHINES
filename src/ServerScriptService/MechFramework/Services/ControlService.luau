@@ -91,7 +91,8 @@ function Control:GenerateDefaultBindings(userId: number, mechId: string, force: 
 			end
 			if mobility.Kind == "OmniWheel" then
 				add(groups,"StrafeLeft",componentId); add(groups,"StrafeRight",componentId)
-			elseif mobility.Steer == true and mobility.FreeCaster ~= true then
+			end
+			if mobility.FreeCaster ~= true and (mobility.Steer==true or mobility.Kind=="TrackDrive" or mobility.Kind=="OmniWheel") then
 				add(groups,"SteerLeft",componentId); add(groups,"SteerRight",componentId)
 			end
 			if mobility.Kind ~= "Drivetrain" then add(groups,"Brake",componentId) end

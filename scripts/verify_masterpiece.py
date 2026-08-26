@@ -91,6 +91,7 @@ preview = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildP
 ui = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildUI.luau")
 controller = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau")
 weapon_client = text("src/StarterPlayer/StarterPlayerScripts/WeaponController.client.luau")
+preset_blueprints = text("src/ReplicatedStorage/MechFramework/Shared/PresetBlueprints.luau")
 
 check("#ordered >= 100" in catalog and "Catalog.Validate" in catalog, "PartCatalog lost minimum-count/runtime validation")
 check("REQUIRED_IDS" in catalog and "StudBlock" in catalog, "PartCatalog lost required baseline IDs")
@@ -104,6 +105,21 @@ check("PartRenderer.Render" in preview and "function BuildPreview:SetMirror" in 
 check("PartCatalog.GetList()" in controller and "#catalog >= 100" in controller, "client is not driven by an expansion-safe catalog")
 check("local PARTS" not in controller, "old hardcoded client PARTS table returned")
 check("SetInventoryCounts" in ui and 'Action="Inventory"' in controller, "live buildable inventory UI is not wired")
+
+# Factory blueprints: nine editable machines assembled exclusively from the canonical catalog.
+required_presets = {
+    "ScoutStrider", "SiegeTank", "VanguardWalker", "LightHumanoid", "MediumHumanoid",
+    "HeavyHumanoid", "CombatBuggy", "TrackedBattleTank", "Hovercraft",
+}
+preset_ids = set(re.findall(r'factory\(\s*["\']([^"\']+)["\']', preset_blueprints))
+check(preset_ids == required_presets, f"factory preset IDs differ: {sorted(preset_ids)}")
+preset_part_ids = set(re.findall(r'piece\(\s*["\'][^"\']+["\']\s*,\s*["\']([^"\']+)["\']', preset_blueprints))
+check(bool(preset_part_ids), "factory presets contain no catalog pieces")
+check(preset_part_ids <= set(part_ids), f"factory presets reference unknown catalog parts: {sorted(preset_part_ids-set(part_ids))}")
+for preset_id in sorted(required_presets):
+    check(f'factory("{preset_id}"' in preset_blueprints, f"factory preset missing: {preset_id}")
+check("PresetBlueprints.Get" in preset_blueprints and "PresetBlueprints.List" in preset_blueprints, "factory preset catalogue API is incomplete")
+check("entry.FactoryPreset" in ui and "entry.DisplayName" in ui, "Blueprints UI does not distinguish factory presets")
 
 # Workshop V3 visual architecture. These checks intentionally require more than a reskin:
 # real procedural thumbnails, a grid catalog, command-deck telemetry, tabs, and motion polish.
@@ -141,6 +157,11 @@ control = text("src/ServerScriptService/MechFramework/Services/ControlService.lu
 power = text("src/ServerScriptService/MechFramework/Services/PowerService.luau")
 fuel = text("src/ServerScriptService/MechFramework/Services/FuelService.luau")
 
+check("PresetBlueprints" in pilot and "FactoryPreset" in pilot, "PilotService does not expose factory presets")
+check("ConsumeInventory=not isFactory" in pilot, "factory presets must not consume player inventory")
+check("PresetBlueprints.List()" in pilot and "PresetBlueprints.Get(name)" in pilot, "factory presets are not merged/listed and loadable")
+check('mobility.Kind=="TrackDrive" or mobility.Kind=="OmniWheel"' in control, "tracked and omni factory machines cannot receive steering bindings")
+
 for service in ("FuelService", "PowerService", "HeatService", "ControlService", "PilotService", "VehicleService", "PropulsionService", "AerodynamicsService"):
     check(f'"{service}"' in bootstrap, f"bootstrap does not register required machine service: {service}")
 check('framework:SetAttribute("BuilderServerReady", true)' in bootstrap, "builder readiness boundary missing")
@@ -156,7 +177,7 @@ for token in ("GetBuildableCount", "ConsumeOne", "RestorePartReceipt", "ReturnBu
     check(token in inventory, f"inventory hardening missing: {token}")
 for token in ("ConsumeInventory", "_reserveBlueprintInventory", "InventoryReceipt", "BlueprintSourceId", "PrimaryComponentId"):
     check(token in build, f"BuildService blueprint/economy invariant missing: {token}")
-check("ConsumeInventory=true" in pilot, "workshop blueprint spawning no longer consumes inventory")
+check("ConsumeInventory=not isFactory" in pilot, "player blueprints must consume inventory while factory presets remain free")
 check("PrimaryComponentId" in pilot, "blueprint save lost deterministic primary component")
 check("BlueprintSourceId" in control, "saved control bindings cannot remap blueprint component IDs")
 check("GMProfileReady" in save and "function Save:IsReady" in save, "per-player save readiness is missing")

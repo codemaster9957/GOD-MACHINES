@@ -1202,16 +1202,24 @@ function BuildUI:SetBlueprints(entries)
 		row.Parent = self.BlueprintList
 		corner(row, 5)
 		stroke(row, COLORS.BorderSoft, 0.25, 1)
-		local name = label(row, string.upper(tostring(entry.Name or "BLUEPRINT")), 9, true)
+		local displayName = entry.DisplayName or entry.Name or "BLUEPRINT"
+		local name = label(row, string.upper(tostring(displayName)), 9, true)
 		name.Position = UDim2.fromOffset(8, 5)
 		name.Size = UDim2.new(1, -16, 0, 16)
-		local meta = label(row, string.format("%d PARTS  /  %s", tonumber(entry.PartCount) or 0, prettyDate(entry.SavedAt)), 7, false)
+		if entry.FactoryPreset then name.TextColor3 = COLORS.Amber end
+		local detail = if entry.FactoryPreset
+			then string.format("FACTORY / %s / %s", tostring(entry.Class or "MACHINE"), tostring(entry.Difficulty or "READY"))
+			else prettyDate(entry.SavedAt)
+		local meta = label(row, string.format("%d PARTS  /  %s", tonumber(entry.PartCount) or 0, detail), 7, false)
 		meta.Position = UDim2.fromOffset(8, 24)
 		meta.Size = UDim2.new(1, -16, 0, 14)
 		meta.TextColor3 = COLORS.Muted
 		row.MouseEnter:Connect(function() tween(row, {BackgroundColor3 = COLORS.PanelHover}, 0.1) end)
 		row.MouseLeave:Connect(function() tween(row, {BackgroundColor3 = COLORS.PanelRaised}, 0.1) end)
-		row.MouseButton1Click:Connect(function() self.BlueprintName.Text = tostring(entry.Name or "") end)
+		row.MouseButton1Click:Connect(function()
+			self.BlueprintName.Text = tostring(entry.Name or "")
+			if entry.FactoryPreset then self:SetStatus(tostring(entry.Description or "Factory blueprint ready"), "good") end
+		end)
 	end
 end
 
