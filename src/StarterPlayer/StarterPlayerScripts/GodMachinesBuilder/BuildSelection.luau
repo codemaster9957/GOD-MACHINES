@@ -120,6 +120,43 @@ function BuildSelection:GetIds()
 	return ids
 end
 
+function BuildSelection:GetBoundingBox()
+	local minimum=nil
+	local maximum=nil
+	for componentId in pairs(self.Selected) do
+		local model=self:_findComponentModel(componentId)
+		if model then
+			local ok,cf,size=pcall(function()
+				local a,b=model:GetBoundingBox()
+				return a,b
+			end)
+			if ok and typeof(cf)=="CFrame" and typeof(size)=="Vector3" then
+				local half=size*.5
+				local low=cf.Position-half
+				local high=cf.Position+half
+				minimum=if minimum then Vector3.new(math.min(minimum.X,low.X),math.min(minimum.Y,low.Y),math.min(minimum.Z,low.Z)) else low
+				maximum=if maximum then Vector3.new(math.max(maximum.X,high.X),math.max(maximum.Y,high.Y),math.max(maximum.Z,high.Z)) else high
+			end
+		end
+	end
+	if not minimum or not maximum then return nil,nil end
+	return CFrame.new((minimum+maximum)*.5),maximum-minimum
+end
+
+function BuildSelection:SuggestedDuplicateDelta()
+	local _,size=self:GetBoundingBox()
+	local span=if size then math.max(size.X,size.Z,2) else 4
+	local distance=math.clamp(span+2,4,80)
+	local camera=workspace.CurrentCamera
+	local direction=Vector3.xAxis
+	if camera then
+		local right=camera.CFrame.RightVector
+		local flat=Vector3.new(right.X,0,right.Z)
+		if flat.Magnitude>.05 then direction=flat.Unit end
+	end
+	return CFrame.new(direction*distance)
+end
+
 function BuildSelection:Count()
 	local count = 0
 	for _ in pairs(self.Selected) do count += 1 end
