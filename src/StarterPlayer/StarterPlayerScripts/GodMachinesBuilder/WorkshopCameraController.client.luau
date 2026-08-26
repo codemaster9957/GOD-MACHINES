@@ -44,6 +44,16 @@ local function shiftDown()
 		or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
 end
 
+local function controlDown()
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+		or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+end
+
+local function altDown()
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt)
+		or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)
+end
+
 local function setModeLabel()
 	cameraBar:SetCameraMode(if workshopCamera.FreeFly then "Fly" else "Orbit")
 end
@@ -121,8 +131,10 @@ local inputConnection = UserInputService.InputBegan:Connect(function(input, proc
 	if processed or not active then return end
 	if UserInputService:GetFocusedTextBox() then return end
 
+	-- Plain F frames the machine. Modifier variants remain available to the newer
+	-- Workshop search/favourites QoL shortcuts.
 	if input.KeyCode == Enum.KeyCode.F then
-		frameCamera()
+		if not shiftDown() and not controlDown() and not altDown() then frameCamera() end
 		return
 	end
 	if input.KeyCode == Enum.KeyCode.V then
