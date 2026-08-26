@@ -15,6 +15,14 @@ local PAN_SENSITIVITY = 0.0025
 local ZOOM_SENSITIVITY = 0.13
 local MIN_PITCH = math.rad(-85)
 local MAX_PITCH = math.rad(85)
+local DOUBLE_CLICK_WINDOW = 0.30
+local PREVIEW_TINT_ALPHA = 0.58
+local PREVIEW_COLOR_EPSILON = 0.025
+
+local VALID_PREVIEW_TINTS = {
+	Color3.fromRGB(255, 184, 55), -- FREE
+	Color3.fromRGB(65, 255, 130), -- SNAP
+}
 
 local VIEW_DIRECTIONS = {
 	Front = Vector3.new(0, 0, -1),
@@ -56,11 +64,19 @@ local function easeOutCubic(alpha)
 	return 1 - (1 - x) ^ 3
 end
 
+local function colorsNear(a, b)
+	local dr = a.R - b.R
+	local dg = a.G - b.G
+	local db = a.B - b.B
+	return math.sqrt(dr * dr + dg * dg + db * db) <= PREVIEW_COLOR_EPSILON
+end
+
 function WorkshopCamera.new(UserInputService, RunService)
 	local self = setmetatable({}, WorkshopCamera)
 	self.UserInputService = UserInputService
 	self.RunService = RunService
 	self.Player = Players.LocalPlayer
+	self.Mouse = if self.Player then self.Player:GetMouse() else nil
 	self.Active = false
 	self.FreeFly = false
 	self.MechId = nil
@@ -76,6 +92,7 @@ function WorkshopCamera.new(UserInputService, RunService)
 	self._dragDelta = Vector2.zero
 	self._panDelta = Vector2.zero
 	self._zoomDelta = 0
+	self._lastPrimaryClickAt = 0
 	self._transitionStarted = 0
 	self._transitionDuration = 0.2
 	self._transitionFrom = nil
@@ -92,6 +109,16 @@ function WorkshopCamera.new(UserInputService, RunService)
 			self._panHeld = true
 			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
 			UserInputService.MouseIconEnabled = false
+		elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+			local now = os.clock()
+			local isDoubleClick = now - self._lastPrimaryClickAt <= DOUBLE_CLICK_WINDOW
+			self._lastPrimaryClickAt = now
+			if isDoubleClick and not self:_placementGhostValid() then
+				local target = self.Mouse and self.Mouse.Target
+				if target and self:_targetBelongsToActiveMech(target) then
+					self:FocusComponent(target)
+				end
+			end
 		end
 	end))
 
@@ -124,6 +151,43 @@ function WorkshopCamera:_findMech()
 	local assemblies = workspace:FindFirstChild("MechAssemblies")
 	local model = assemblies and assemblies:FindFirstChild(self.MechId)
 	return if model and model:IsA("Model") then model else nil
+end
+
+function WorkshopCamera:_targetBelongsToActiveMech(instance)
+	if not instance or type(self.MechId) ~= "string" then return false end
+	local current = instance
+	while current and current ~= workspace do
+		local targetMechId = current:GetAttribute("MechId")
+		if type(targetMechId) == "string" then return targetMechId == self.MechId end
+		current = current.Parent
+	end
+	return false
+end
+
+function WorkshopCamera:_placementGhostValid()
+	local ghost = workspace:FindFirstChild("GodMachinesBuildGhost")
+	if not ghost or not ghost:IsA("Model") then return false end
+	for _, descendant in ipairs(ghost:GetDescendants()) do
+		if descendant:IsA("BasePart") and descendant:GetAttribute("GMVisual") == true then
+			local base = descendant:GetAttribute("BaseColor")
+			if typeof(base) == "Color3" then
+				for _, tint in ipairs(VALID_PREVIEW_TINTS) do
+					local expected = base:Lerp(tint, PREVIEW_TINT_ALPHA)
+					if colorsNear(descendant.Color, expected) then return true end
+				end
+			end
+		end
+	end
+	return false
+end
+
+function WorkshopCamera:_beginTransition()
+	if not self.Active then return end
+	local camera = currentCamera()
+	if not camera then return end
+	self._transitionFrom = camera.CFrame
+	self._transitionStarted = os.clock()
+	self._transitioning = true
 end
 
 function WorkshopCamera:_bounds(instance)
@@ -222,6 +286,7 @@ function WorkshopCamera:SetMech(mechId)
 end
 
 function WorkshopCamera:FrameMachine()
+	self:_beginTransition()
 	local cf, size = self:_machineBounds()
 	if cf and size then
 		self:_setFocusFromBounds(cf, size)
@@ -255,11 +320,9 @@ function WorkshopCamera:FocusComponent(instance)
 	if not chosen then return false end
 	local cf, size = self:_bounds(chosen)
 	if not cf or not size then return false end
+	self:_beginTransition()
+	self.FreeFly = false
 	self:_setFocusFromBounds(cf, size)
-	if self.FreeFly then
-		local look = lookFromAngles(self.Yaw, self.Pitch)
-		self.FreePosition = self.FocusPosition - look * self.Distance
-	end
 	return true
 end
 
@@ -302,6 +365,7 @@ function WorkshopCamera:Activate(mechId)
 		self._transitionFrom = camera.CFrame
 	end
 	self.Active = true
+	self._lastPrimaryClickAt = 0
 	self.MechId = if type(mechId) == "string" and mechId ~= "" then mechId else self.MechId
 	camera.CameraType = Enum.CameraType.Scriptable
 	self.Yaw, self.Pitch = anglesFromLook(camera.CFrame.LookVector)
@@ -320,6 +384,7 @@ function WorkshopCamera:Deactivate(reason)
 	self._dragDelta = Vector2.zero
 	self._panDelta = Vector2.zero
 	self._zoomDelta = 0
+	self._lastPrimaryClickAt = 0
 	self:_restoreState(reason)
 	self._saved = nil
 	self._transitioning = false
