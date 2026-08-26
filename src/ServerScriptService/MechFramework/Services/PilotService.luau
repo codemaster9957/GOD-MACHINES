@@ -4,7 +4,9 @@
 local Players=game:GetService("Players")
 local Workspace=game:GetService("Workspace")
 local RunService=game:GetService("RunService")
-local Pilot:any={_seatPilots={},_lastScan=0}
+local ReplicatedStorage=game:GetService("ReplicatedStorage")
+local QuickSwapRules=require(ReplicatedStorage.MechFramework.Shared.QuickSwapRules)
+local Pilot:any={_seatPilots={},_quickSwapState={},_quickSwapBusy={},_lastScan=0}
 
 local function clone(value:any):any
 	if type(value)~="table" then return value end
@@ -120,6 +122,78 @@ function Pilot:_spawnBlueprint(player:Player,name:string):(boolean,any)
 	return true,{MechId=mechId,Name=name}
 end
 
+local function humanoidFor(player:Player):Humanoid?
+	local character=player.Character; if not character then return nil end
+	local humanoid=character:FindFirstChildOfClass("Humanoid")
+	return if humanoid and humanoid:IsA("Humanoid") then humanoid else nil
+end
+
+function Pilot:_quickSwap(player:Player,currentMechId:string):(boolean,any)
+	if not self:_profileReady(player) then return false,"ProfileLoading" end
+	if not self._mechs:IsOwner(player.UserId,currentMechId) then return false,"NotAuthorized" end
+	local currentModel=assemblyModel(currentMechId)
+	if not currentModel or not currentModel.PrimaryPart then return false,"MachineNotReady" end
+	if currentModel:GetAttribute("EditMode")~=false then return false,"EnterTestModeFirst" end
+	if self._quickSwapBusy[player.UserId] then return false,"QuickSwapBusy" end
+
+	local state=self._quickSwapState[player.UserId] or {LastAt=nil,CurrentSlot=nil}
+	local now=os.clock()
+	local remaining=QuickSwapRules.CooldownRemaining(state.LastAt,now,QuickSwapRules.CooldownSeconds)
+	if remaining>0 then return false,{Error="QuickSwapCooldown",Remaining=remaining} end
+	local slots=self._save:GetQuickSwapSlots(player.UserId)
+	local currentBlueprint=tostring(currentModel:GetAttribute("BlueprintId") or "")
+	local cursor=state.CurrentSlot
+	local nextSlot:number?=nil; local name:string?=nil
+	for _=1,QuickSwapRules.MaxSlots do
+		local candidateSlot,candidateName=QuickSwapRules.NextAssignedSlot(slots,cursor)
+		if not candidateSlot or not candidateName then break end
+		cursor=candidateSlot
+		if candidateName~=currentBlueprint then nextSlot,name=candidateSlot,candidateName; break end
+	end
+	if not nextSlot or not name then
+		if next(slots)==nil then return false,"NoQuickSwapVehicles" end
+		return false,"AlreadyUsingQuickSwapVehicle"
+	end
+	local blueprint=self._save:GetBlueprint(player.UserId,name)
+	if not blueprint then return false,"BlueprintNotFound" end
+
+	local humanoid=humanoidFor(player)
+	local oldSeat=humanoid and humanoid.SeatPart
+	local shouldReseat=oldSeat~=nil and oldSeat:IsDescendantOf(currentModel)
+	local spawnCFrame=currentModel.PrimaryPart.CFrame
+	self._quickSwapBusy[player.UserId]=true
+	local called,ok,result=pcall(function()
+		return self._build:ReplaceBlueprint(player.UserId,currentMechId,blueprint,spawnCFrame,{
+			BattleSpawn=currentModel:GetAttribute("BattleSpawn")==true,
+			Playing=true,
+			QuickSwap=true,
+			MatchId=currentModel:GetAttribute("MatchId"),
+			Team=currentModel:GetAttribute("Team"),
+		})
+	end)
+	self._quickSwapBusy[player.UserId]=nil
+	if not called then warn("[PilotService] Quick swap failed",result); return false,"QuickSwapFailed" end
+	if not ok then return false,result end
+
+	local newMechId=result
+	self._control:ClearMech(currentMechId)
+	if type(blueprint.Controls)=="table" then self._control:SetBindings(player.UserId,newMechId,blueprint.Controls,true) else self._control:GenerateDefaultBindings(player.UserId,newMechId,true) end
+	local newModel=assemblyModel(newMechId)
+	if newModel then newModel:SetAttribute("EditMode",false); if self:_hasRemoteCore(newMechId) then newModel:SetAttribute("PilotUserId",player.UserId) end end
+	player:SetAttribute("ActiveMechId",newMechId); player:SetAttribute("BuildMode",false)
+	self._power:Invalidate(newMechId); self._power:Evaluate(newMechId,0); self._heat:Invalidate(newMechId)
+	state.LastAt=now; state.CurrentSlot=nextSlot; self._quickSwapState[player.UserId]=state
+
+	if shouldReseat and humanoid and newModel and not self:_hasRemoteCore(newMechId) then
+		task.defer(function()
+			for _,descendant in ipairs(newModel:GetDescendants()) do
+				if (descendant:IsA("Seat") or descendant:IsA("VehicleSeat")) and descendant:GetAttribute("Role")=="PilotSeat" then descendant:Sit(humanoid); break end
+			end
+		end)
+	end
+	return true,{MechId=newMechId,Slot=nextSlot,Name=name,Slots=slots,Cooldown=QuickSwapRules.CooldownSeconds}
+end
+
 function Pilot:_scanSeats()
 	local assemblies=Workspace:FindFirstChild("MechAssemblies"); if not assemblies then return end
 	local seen={}
@@ -161,6 +235,16 @@ function Pilot:Start()
 		elseif action=="DeleteBlueprint" then
 			if not self:_profileReady(player) then return false,"ProfileLoading" end
 			if type(request.Name)~="string" then return false,"BadBlueprintRequest" end; local removed=self._save:DeleteBlueprint(player.UserId,request.Name); return removed,if removed then "Deleted" else "BlueprintNotFound"
+		elseif action=="GetQuickSwapSlots" then
+			if not self:_profileReady(player) then return false,"ProfileLoading" end
+			return true,self._save:GetQuickSwapSlots(player.UserId)
+		elseif action=="SetQuickSwapSlot" then
+			if not self:_profileReady(player) then return false,"ProfileLoading" end
+			if type(request.Slot)~="number" or (request.Name~=nil and type(request.Name)~="string") then return false,"BadQuickSwapRequest" end
+			return self._save:SetQuickSwapSlot(player.UserId,request.Slot,request.Name)
+		elseif action=="QuickSwap" then
+			if type(request.MechId)~="string" then return false,"BadQuickSwapRequest" end
+			return self:_quickSwap(player,request.MechId)
 		elseif action=="GetBindings" then
 			if type(request.MechId)~="string" or not self._mechs:IsOwner(player.UserId,request.MechId) then return false,"NotAuthorized" end; return true,self._control:GetBindings(request.MechId)
 		elseif action=="SetBindings" then
@@ -173,7 +257,10 @@ function Pilot:Start()
 		return false,"UnknownAction"
 	end
 	RunService.Heartbeat:Connect(function() local now=os.clock(); if now-self._lastScan<.2 then return end; self._lastScan=now; self:_scanSeats() end)
-	Players.PlayerRemoving:Connect(function(player) for seat,userId in pairs(self._seatPilots) do if userId==player.UserId then self._seatPilots[seat]=nil end end end)
+	Players.PlayerRemoving:Connect(function(player)
+		for seat,userId in pairs(self._seatPilots) do if userId==player.UserId then self._seatPilots[seat]=nil end end
+		self._quickSwapState[player.UserId]=nil; self._quickSwapBusy[player.UserId]=nil
+	end)
 end
 
 return Pilot
