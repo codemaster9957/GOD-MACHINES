@@ -56,6 +56,7 @@ local OPTIONAL_ORDER = {
 	"TradeService",
 	"AIService",
 	"NetworkService",
+	"PolishService",
 }
 
 -- Test/battle machine mode is only advertised when every engineering layer that directly
