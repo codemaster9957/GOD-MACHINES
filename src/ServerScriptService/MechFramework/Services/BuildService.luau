@@ -9,6 +9,7 @@ local Shared=MechFramework:WaitForChild("Shared")
 local Remotes=MechFramework:WaitForChild("Remotes")
 local BuildMath=require(Shared:WaitForChild("BuildMath"))
 local PartRenderer=require(Shared:WaitForChild("PartRenderer"))
+local GroupBuildTransactions=require(script.Parent:WaitForChild("GroupBuildTransactions"))
 
 local Build={_history={},_future={},_mechs=nil,_parts=nil,_connections=nil,_inventory=nil,_physics=nil}
 local ALLOWED_MATERIALS={Metal=true,SmoothPlastic=true,DiamondPlate=true,CorrodedMetal=true,Granite=true,Slate=true}
@@ -262,7 +263,6 @@ function Build:_placeSymmetric(player,request)
 		return true,{MechId=request.MechId,ComponentId=primary.ComponentId,SymmetryCount=1,Revision=mech.Revision}
 	end
 
-	-- Realize the primary half before clearance so the mirror cannot overlap it unnoticed.
 	self:_realize(request.MechId)
 	if not self:_clearance(definition,mirroredTransform) then self:_restore(request.MechId,before,player.UserId); return false,"SymmetryCollision" end
 	local mirroredMirrorX=not (primary.MirrorX==true)
@@ -451,6 +451,9 @@ function Build:Start()
 		elseif action=="Place" then if type(request.Symmetry)=="table" then return self:_placeSymmetric(player,request) end; return self:_place(player,request)
 		elseif action=="Remove" then return self:_remove(player,request)
 		elseif action=="GroupRemove" then return self:_groupRemove(player,request)
+		elseif action=="GroupDuplicate" then return GroupBuildTransactions.Duplicate(self,player,request)
+		elseif action=="GroupMirror" then return GroupBuildTransactions.Mirror(self,player,request)
+		elseif action=="GroupMove" then return GroupBuildTransactions.Move(self,player,request)
 		elseif action=="Move" then return self:_move(player,request)
 		elseif action=="Paint" then return self:_paint(player,request)
 		elseif action=="Duplicate" then return self:_duplicate(player,request)
