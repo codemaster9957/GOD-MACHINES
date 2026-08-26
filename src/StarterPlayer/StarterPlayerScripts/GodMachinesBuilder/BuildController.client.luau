@@ -1,5 +1,5 @@
 --!nonstrict
--- GOD MACHINES Workshop V3 client orchestration. Server remains authoritative for every mutation.
+-- GOD MACHINES Workshop V3 / Phase 2 client orchestration. Server remains authoritative for every mutation.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,7 +14,9 @@ local mouse = player:GetMouse()
 local BuildUI = require(script.Parent:WaitForChild("BuildUI"))
 local BuildPreview = require(script.Parent:WaitForChild("BuildPreview"))
 local BuildInput = require(script.Parent:WaitForChild("BuildInput"))
+local BuildSelection = require(script.Parent:WaitForChild("BuildSelection"))
 local NodeVisualizer = require(script.Parent:WaitForChild("NodeVisualizer"))
+local SymmetryPreview = require(script.Parent:WaitForChild("SymmetryPreview"))
 local WorkshopCamera = require(script.Parent:WaitForChild("WorkshopCamera"))
 local WorkshopCameraBar = require(script.Parent:WaitForChild("WorkshopCameraBar"))
 
@@ -33,11 +35,11 @@ assert(machineRemote:IsA("RemoteFunction"), "RequestMachineAction must be Remote
 local catalog = PartCatalog.GetList()
 local definitions = PartCatalog.GetAll()
 local categories = PartCatalog.GetCategories()
-assert(#catalog == 100, "[GOD MACHINES] Expected 100 public catalog parts")
+assert(#catalog >= 100, "[GOD MACHINES] Expected at least 100 public catalog parts")
 
 local buildMode = false
 local machineMode = "Edit"
-local selectedPart = definitions.StructuralFrame and "StructuralFrame" or catalog[1].Id
+local selectedPart = if definitions.StudBlock then "StudBlock" elseif definitions.StructuralFrame then "StructuralFrame" else catalog[1].Id
 local activeAttribute = player:GetAttribute("ActiveMechId")
 local mechId = if type(activeAttribute) == "string" and activeAttribute ~= "" then activeAttribute else nil
 local statusLockUntil = 0
@@ -51,6 +53,8 @@ local duplicateSourceId = nil
 local ui = BuildUI.new(playerGui, {})
 local preview = BuildPreview.new(mouse, BuildMath)
 local nodes = NodeVisualizer.new()
+local selection = BuildSelection.new()
+local symmetryPreview = SymmetryPreview.new()
 local workshopCamera = WorkshopCamera.new(UserInputService, RunService)
 local cameraCallbacks = {}
 local cameraBar = WorkshopCameraBar.new(ui.Root, cameraCallbacks)
@@ -126,14 +130,19 @@ end
 
 local function setActiveMech(value, fromAttribute)
 	local normalized = normalizeMechId(value)
-	if normalized ~= mechId then duplicateSourceId = nil end
+	if normalized ~= mechId then
+		duplicateSourceId = nil
+		selection:Clear()
+	end
 	mechId = normalized
 	if fromAttribute ~= true and player:GetAttribute("ActiveMechId") ~= normalized then
 		player:SetAttribute("ActiveMechId", normalized)
 	end
 	nodes:SetMech(normalized)
+	selection:SetMech(normalized)
 	workshopCamera:SetMech(normalized)
 	if not normalized then
+		symmetryPreview:SetEnabled(false)
 		ui:SetEngineeringSummary(nil)
 		currentBindings = {}
 	end
@@ -180,10 +189,13 @@ local function setBuildVisible(enabled, cameraReason)
 		workshopCamera:Activate(mechId)
 		cameraBar:SetCameraMode(workshopCamera.FreeFly and "Fly" or "Orbit")
 		nodes:SetMech(mechId)
+		selection:SetMech(mechId)
 		selectPart(selectedPart)
 		task.spawn(function() refreshInventory(true) end)
 	else
 		workshopCamera:Deactivate(cameraReason or "Close")
+		symmetryPreview:Update(nil,nil,false,nil,nil,nil)
+		selection:Clear()
 		statusLockUntil = 0
 	end
 end
@@ -211,7 +223,6 @@ local function testMachine()
 	if not mechId then status("BUILD A MACHINE FIRST", "bad", 1.0); return end
 	if machineMode == "Test" then enterEditMode(); return end
 
-	-- Release Scriptable camera before pilot/test authority changes.
 	workshopCamera:Deactivate("Test")
 	local success, result = machineInvoke({ Action="SetMode", MechId=mechId, Mode="Test" }, 8)
 	if not success then
@@ -250,16 +261,25 @@ local function placePart()
 	local duplicateActive = type(duplicateSourceId)=="string"
 	local request = {
 		Action=if duplicateActive then "Duplicate" else "Place",
-		MechId=mechId, PartType=selectedPart, Transform=data.Transform,
-		TargetComponentId=data.TargetComponentId, TargetNode=data.TargetNode, SourceNode=data.SourceNode,
-		Rotation=data.Rotation, MirrorX=data.MirrorX == true,
+		MechId=mechId,
+		PartType=selectedPart,
+		Transform=data.Transform,
+		TargetComponentId=data.TargetComponentId,
+		TargetNode=data.TargetNode,
+		SourceNode=data.SourceNode,
+		Orientation=data.Orientation,
+		MirrorX=data.MirrorX == true,
+		Symmetry=if symmetryPreview.Enabled then {Axis="X"} else nil,
 	}
 	if duplicateActive then request.ComponentId=duplicateSourceId end
 	local success, result = buildInvoke(request, 8)
 	if success then
 		if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
+		selection:Clear()
 		task.spawn(function() refreshInventory(true) end)
-		if duplicateActive then
+		if symmetryPreview.Enabled then
+			status("SYMMETRIC COMPONENTS INSTALLED", "good", .75)
+		elseif duplicateActive then
 			status("DUPLICATE INSTALLED — COPY TOOL STILL ARMED", "good", .75)
 		else
 			status("COMPONENT INSTALLED", "good", .55)
@@ -284,6 +304,7 @@ local function removePart()
 	local success, result = buildInvoke({ Action="Remove", MechId=mechId, ComponentId=componentId }, 8)
 	if success then
 		if componentId==duplicateSourceId then duplicateSourceId=nil end
+		selection:Clear()
 		if type(result)=="table" and result.Empty==true then
 			setActiveMech(nil)
 			status("MACHINE CLEARED — PLACE A NEW FOUNDATION", "good", .85)
@@ -334,6 +355,7 @@ local function applyHistory(action)
 	local success, result = buildInvoke({ Action=action }, 8)
 	if success then
 		duplicateSourceId=nil
+		selection:Clear()
 		if type(result)=="table" then
 			if result.Empty==true then setActiveMech(nil)
 			elseif type(result.MechId)=="string" then setActiveMech(result.MechId) end
@@ -347,9 +369,22 @@ end
 
 local function rotate()
 	if not buildMode then return end
-	preview:Rotate()
+	local orientation,axis=preview:Rotate()
 	preview:Update(mechId)
-	status("ROTATED 90°", nil, .2)
+	status(string.format("ROTATED %s 90°  [%d,%d,%d]",axis,orientation.X,orientation.Y,orientation.Z), nil, .3)
+end
+
+local function cycleRotationAxis()
+	if not buildMode then return end
+	local axis=preview:CycleRotationAxis(1)
+	status("ROTATION AXIS: "..axis, "blue", .45)
+end
+
+local function cycleSnap(direction)
+	if not buildMode then return end
+	preview:CycleSnap(direction)
+	preview:Update(mechId)
+	status(if direction<0 then "PREVIOUS SNAP CANDIDATE" else "NEXT SNAP CANDIDATE", nil, .25)
 end
 
 local function mirror()
@@ -357,8 +392,36 @@ local function mirror()
 	local mirrored = preview:Mirror()
 	preview:Update(mechId)
 	ui:SetMirrorState(mirrored)
-	status(if mirrored then "MIRROR ENABLED" else "MIRROR DISABLED", nil, .25)
+	status(if mirrored then "PART MIRROR ENABLED" else "PART MIRROR DISABLED", nil, .25)
 	return mirrored
+end
+
+local function toggleSymmetry()
+	if not buildMode then return false end
+	if not mechId then status("PLACE A FOUNDATION BEFORE ENABLING SYMMETRY", "bad", .8); return false end
+	local enabled=symmetryPreview:Toggle()
+	status(if enabled then "X SYMMETRY ENABLED — H TO DISABLE" else "X SYMMETRY DISABLED", enabled and "good" or nil, .7)
+	return enabled
+end
+
+local function toggleSelection()
+	if not buildMode or not mechId then return end
+	local targetMech, componentId = componentFromTarget()
+	if targetMech ~= mechId or not componentId then status("SHIFT+CLICK ONE OF YOUR COMPONENTS", "bad", .55); return end
+	local selected=selection:Toggle(componentId)
+	status((selected and "SELECTED " or "DESELECTED ")..tostring(componentId).."  ["..selection:Count().."]", nil, .35)
+end
+
+local function selectAll()
+	if not buildMode or not mechId then return end
+	local count=selection:SelectAll()
+	status("SELECTED "..tostring(count).." COMPONENTS", "blue", .55)
+end
+
+local function clearSelection()
+	local count=selection:Count()
+	selection:Clear()
+	if count>0 then status("SELECTION CLEARED", nil, .3) end
 end
 
 local function selectSlot(slot)
@@ -439,6 +502,7 @@ local function loadBlueprint(name)
 		return
 	end
 	duplicateSourceId=nil
+	selection:Clear()
 	if type(result)=="table" and type(result.MechId)=="string" then setActiveMech(result.MechId) end
 	machineMode = "Edit"
 	ui:SetMode("Edit")
@@ -537,10 +601,25 @@ cameraCallbacks.CameraView = cameraView
 cameraCallbacks.SetOrbit = setOrbitCamera
 
 input = BuildInput.new(UserInputService, {
-	Toggle=toggleBuildMode, Rotate=rotate, Mirror=mirror, Place=placePart, Remove=removePart,
-	Duplicate=duplicateTarget, Undo=function() applyHistory("Undo") end, Redo=function() applyHistory("Redo") end,
-	SelectSlot=selectSlot, TestMachine=testMachine,
-	FrameCamera=frameCamera, ToggleFreeFly=toggleFreeFly, CameraView=cameraView,
+	Toggle=toggleBuildMode,
+	Rotate=rotate,
+	CycleRotationAxis=cycleRotationAxis,
+	CycleSnap=cycleSnap,
+	Mirror=mirror,
+	ToggleSymmetry=toggleSymmetry,
+	Place=placePart,
+	Remove=removePart,
+	Duplicate=duplicateTarget,
+	ToggleSelection=toggleSelection,
+	SelectAll=selectAll,
+	ClearSelection=clearSelection,
+	Undo=function() applyHistory("Undo") end,
+	Redo=function() applyHistory("Redo") end,
+	SelectSlot=selectSlot,
+	TestMachine=testMachine,
+	FrameCamera=frameCamera,
+	ToggleFreeFly=toggleFreeFly,
+	CameraView=cameraView,
 })
 
 player:SetAttribute("BuildMode", false)
@@ -548,6 +627,7 @@ ui:SetBuildMode(false)
 preview:SetEnabled(false)
 nodes:SetEnabled(false)
 nodes:SetMech(mechId)
+selection:SetMech(mechId)
 workshopCamera:SetMech(mechId)
 cameraBar:SetVisible(false)
 
@@ -590,9 +670,16 @@ local renderConnection = RunService.RenderStepped:Connect(function(dt)
 		workshopCamera:Update(dt)
 		local state = preview:Update(mechId)
 		nodes:Update()
+		selection:Refresh()
 		refreshSummary()
+		local placement = preview:GetPlacement(mechId)
+		if symmetryPreview.Enabled and placement and mechId then
+			symmetryPreview:Update(definitions[selectedPart], preview.Paint, preview.MirrorX, placement.Transform, mechId, state)
+		else
+			symmetryPreview:Update(nil,nil,false,nil,nil,nil)
+		end
 		if os.clock() >= statusLockUntil then
-			if state=="SNAP" then ui:SetStatus(if duplicateSourceId then "COPY READY" else "ATTACHMENT READY", "good")
+			if state=="SNAP" then ui:SetStatus(if duplicateSourceId then "COPY READY" elseif symmetryPreview.Enabled then "SYMMETRY READY" else "ATTACHMENT READY", "good")
 			elseif state=="FREE" then ui:SetStatus(if duplicateSourceId then "COPY FREE PLACEMENT" else "FREE PLACEMENT", nil)
 			elseif state=="ATTACHMENT_REQUIRED" then ui:SetStatus("ATTACH TO A GREEN NODE", "bad")
 			elseif state=="OTHER_MECH" then ui:SetStatus("OTHER MACHINE", "bad")
@@ -608,10 +695,12 @@ script.Destroying:Connect(function()
 	if input then input:Destroy() end
 	workshopCamera:Destroy()
 	cameraBar:Destroy()
+	symmetryPreview:Destroy()
+	selection:Destroy()
 	preview:Destroy()
 	nodes:Destroy()
 	ui:Destroy()
 	if renderConnection then renderConnection:Disconnect() end
 end)
 
-print("[GOD MACHINES] Workshop V3 initialized with", #catalog, "parts")
+print("[GOD MACHINES] Workshop Phase 2 initialized with", #catalog, "parts")
