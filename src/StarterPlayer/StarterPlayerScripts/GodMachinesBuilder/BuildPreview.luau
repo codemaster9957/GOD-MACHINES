@@ -62,6 +62,10 @@ end
 
 function BuildPreview:_setVisualState(state)
 	if not self.Ghost then return end
+	self.Ghost:SetAttribute("PreviewState",state)
+	self.Ghost:SetAttribute("TargetNode",self.TargetNode or "")
+	local componentId=self.TargetPart and self.TargetPart:GetAttribute("ComponentId") or nil
+	self.Ghost:SetAttribute("TargetComponentId",if type(componentId)=="string" then componentId else "")
 	if state=="SNAP" then PartRenderer.SetPreviewState(self.Ghost,"SNAP")
 	elseif state=="FREE" then PartRenderer.SetPreviewState(self.Ghost,"FREE")
 	else PartRenderer.SetPreviewState(self.Ghost,"INVALID") end
@@ -139,19 +143,20 @@ function BuildPreview:_findCompatiblePair(part,hitPosition)
 	end
 	table.sort(candidates,function(a,b) return (a.WorldPosition-hitPosition).Magnitude<(b.WorldPosition-hitPosition).Magnitude end)
 	local sourceNodes=self.BuildMath.AttachmentNodes(self.Definition,self.MirrorX)
-	local sawCompatible=false
+	local blockedAttachment,blockedSource,blockedTransform=nil,nil,nil
 	for _,attachment in ipairs(candidates) do
 		local targetData=self:_targetNodeData(attachment)
 		local ok,source=pcall(self.BuildMath.BestCompatibleSource,targetData,sourceNodes)
 		if ok and type(source)=="table" then
-			sawCompatible=true
 			local snapOk,snapped=pcall(self.BuildMath.Snap,part.CFrame,attachment.CFrame,source.Transform,self.Turns)
-			if snapOk and typeof(snapped)=="CFrame" and self:_hasClearance(snapped) then
-				return attachment,source,snapped,false
+			if snapOk and typeof(snapped)=="CFrame" then
+				if self:_hasClearance(snapped) then return attachment,source,snapped,false end
+				if not blockedAttachment then blockedAttachment,blockedSource,blockedTransform=attachment,source,snapped end
 			end
 		end
 	end
-	return nil,nil,nil,sawCompatible
+	if blockedAttachment then return blockedAttachment,blockedSource,blockedTransform,true end
+	return nil,nil,nil,false
 end
 
 function BuildPreview:_moveGhost(transform)
@@ -172,9 +177,9 @@ function BuildPreview:Update(activeMechId)
 		local attachment,source,snapped,blocked=self:_findCompatiblePair(candidate,hitPosition)
 		if attachment and source and typeof(snapped)=="CFrame" then
 			self.TargetPart=candidate; self.TargetNode=attachment.Name; self.SourceNode=source.Name; self.PreviewCFrame=snapped
-			self:_moveGhost(snapped); self.LastState="SNAP"; self:_setVisualState(self.LastState); return self.LastState
+			self:_moveGhost(snapped); self.LastState=if blocked then "BLOCKED" else "SNAP"; self:_setVisualState(self.LastState); return self.LastState
 		end
-		self:_moveGhost(self.PreviewCFrame); self.LastState=if blocked then "BLOCKED" else "NO_COMPATIBLE_NODE"; self:_setVisualState(self.LastState); return self.LastState
+		self:_moveGhost(self.PreviewCFrame); self.LastState="NO_COMPATIBLE_NODE"; self:_setVisualState(self.LastState); return self.LastState
 	end
 
 	self:_moveGhost(self.PreviewCFrame)
