@@ -13,9 +13,10 @@ def read(path: str) -> str:
 catalog_path = "src/ReplicatedStorage/MechFramework/Shared/WeaponCatalog.luau"
 binding_path = "src/ReplicatedStorage/MechFramework/Shared/ControlBindingPolicy.luau"
 effects_path = "src/StarterPlayer/StarterPlayerScripts/WeaponEffects.client.luau"
-gundam_parts_path = "src/ReplicatedStorage/MechFramework/Shared/PartDefinitions/GundamWeapons.luau"
+gundam_parts_path = "src/ReplicatedStorage/MechFramework/Shared/GundamWeaponParts.luau"
+extended_catalog_path = "src/ReplicatedStorage/MechFramework/Shared/PartCatalogExtended.luau"
 
-for path in (catalog_path, binding_path, effects_path, gundam_parts_path):
+for path in (catalog_path, binding_path, effects_path, gundam_parts_path, extended_catalog_path):
     assert (ROOT / path).is_file(), f"missing required Gundam weapon-system file: {path}"
 
 catalog = read(catalog_path)
@@ -34,12 +35,17 @@ assert '"Primary"' in binding and '"Secondary"' in binding, "binding policy must
 gundam_parts = read(gundam_parts_path)
 assert "WeaponCatalog" in gundam_parts and "H.part" in gundam_parts, "Gundam weapon records must adapt into the current declarative part library"
 
-part_catalog = read("src/ReplicatedStorage/MechFramework/Shared/PartCatalog.luau")
-assert '"GundamWeapons"' in part_catalog, "PartCatalog must load the Gundam weapon module"
-assert "#ordered >= 100" in part_catalog, "PartCatalog must be expansion-safe at 100+ parts"
+extended = read(extended_catalog_path)
+assert 'WaitForChild("PartCatalog")' in extended and 'WaitForChild("GundamWeaponParts")' in extended, "extended catalogue must preserve legacy catalogue and append Gundam weapons"
+assert "#ordered >= 100" in extended, "extended catalogue must remain expansion-safe"
 
 part_registry = read("src/ServerScriptService/MechFramework/Services/PartRegistry.luau")
+assert "PartCatalogExtended" in part_registry, "PartRegistry must consume the extended catalogue"
 assert "self:Count() >= 100" in part_registry, "PartRegistry must accept the expanded catalogue"
+
+builder = read("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau")
+assert "PartCatalogExtended" in builder, "builder must expose the expanded catalogue"
+assert "#catalog >= 100" in builder, "builder must accept 100+ public parts"
 
 control = read("src/ServerScriptService/MechFramework/Services/ControlService.luau")
 assert "ReconcileBindings" in control, "ControlService must reconcile installed weapons"
