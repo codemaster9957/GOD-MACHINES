@@ -32,6 +32,10 @@ checks = {
         "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/NodeVisualizer.luau",
         "BuildMath.BestCompatibleSource",
     ),
+    "node visualizer caches selected source nodes": (
+        "src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/NodeVisualizer.luau",
+        "_sourceNodeCacheKey",
+    ),
 }
 
 failures: list[str] = []
@@ -54,4 +58,4 @@ if failures:
         print(f" - {failure}")
     sys.exit(1)
 
-print("PASS: builder preview/server use deterministic facing-aware node selection and truthful node visualization")
+print("PASS: builder preview/server use deterministic facing-aware node selection and truthful cached node visualization")
