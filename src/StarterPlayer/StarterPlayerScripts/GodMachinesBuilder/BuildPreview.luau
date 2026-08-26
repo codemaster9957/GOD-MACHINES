@@ -123,12 +123,8 @@ function BuildPreview:_findCompatiblePair(part,hitPosition)
 	local sourceNodes=self.BuildMath.AttachmentNodes(self.Definition,self.MirrorX)
 	for _,attachment in ipairs(candidates) do
 		local targetData=self:_targetNodeData(attachment)
-		for _,source in ipairs(sourceNodes) do
-			if type(source)=="table" and type(source.Name)=="string" and typeof(source.Transform)=="CFrame" then
-				local ok,compatible=pcall(self.BuildMath.Compatible,targetData,source)
-				if ok and compatible then return attachment,source end
-			end
-		end
+		local ok,source=pcall(self.BuildMath.BestCompatibleSource,targetData,sourceNodes)
+		if ok and type(source)=="table" then return attachment,source end
 	end
 	return nil,nil
 end
