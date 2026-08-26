@@ -1,0 +1,41 @@
+name: Quick Swap Syntax Autofix
+
+on:
+  push:
+    branches:
+      - feat/vehicle-quick-swap
+
+permissions:
+  contents: write
+
+jobs:
+  fix-quick-swap-syntax:
+    if: ${{ !contains(github.event.head_commit.message, '[quick-swap-autofix]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/vehicle-quick-swap
+      - name: Patch ambiguous Luau cast calls
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau')
+          text = path.read_text()
+          old = '\n\t\t(quickSwapBridge::BindableEvent):Fire(result)'
+          new = '\n\t\t;(quickSwapBridge::BindableEvent):Fire(result)'
+          patched = text.replace(old, new)
+          if patched == text:
+              raise SystemExit('expected quick-swap bridge cast pattern was not found')
+          path.write_text(patched)
+          PY
+      - name: Commit syntax fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildController.client.luau
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: disambiguate quick swap bridge calls [quick-swap-autofix]"
+          git push origin HEAD:feat/vehicle-quick-swap
