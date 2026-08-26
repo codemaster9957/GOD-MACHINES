@@ -28,6 +28,7 @@ function Control:Init(container: any)
 	self._mechs = container:Get("MechService")
 	self._combat = container:Get("CombatService")
 	self._remote = ReplicatedStorage.MechFramework.Remotes.Events.RequestControlAction
+	self._feedback = ReplicatedStorage.MechFramework.Remotes.Events.CombatFeedback
 end
 
 function Control:SetBindings(userId: number, mechId: string, groups: {[string]: {string}}): boolean
@@ -124,6 +125,28 @@ function Control:_activate(userId: number, mechId: string, action: string, aim: 
 	end
 end
 
+function Control:_reload(player: Player, mechId: string)
+	if not self:ReconcileBindings(player.UserId, mechId) then
+		return
+	end
+
+	local count = 0
+	local groups = self._groups[mechId] or {}
+	for _, action in ipairs({ "Primary", "Secondary" }) do
+		for _, componentId in ipairs(groups[action] or {}) do
+			local ok = self._combat:Reload(player.UserId, mechId, componentId)
+			if ok then
+				count += 1
+			end
+		end
+	end
+
+	self._feedback:FireClient(player, {
+		Kind = "Reloaded",
+		Count = count,
+	})
+end
+
 function Control:_deactivate(mechId: string, action: string)
 	local group = (self._groups[mechId] or {})[action] or {}
 	for _, id in ipairs(group) do
@@ -145,7 +168,7 @@ function Control:Dispatch(player: Player, packet: any)
 		return
 	end
 
-	if not BindingPolicy.IsValidAction(packet.Action) then
+	if not BindingPolicy.IsValidAction(packet.Action) and packet.Action ~= "Reload" then
 		return
 	end
 	if not self._mechs:IsOwner(player.UserId, packet.MechId) then
@@ -164,6 +187,13 @@ function Control:Dispatch(player: Player, packet: any)
 		return
 	end
 	self._lastDispatch[player.UserId] = now
+
+	if packet.Action == "Reload" then
+		if packet.Active then
+			self:_reload(player, packet.MechId)
+		end
+		return
+	end
 
 	local actionKey = heldKey(player.UserId, packet.MechId, packet.Action)
 	if packet.Active then
