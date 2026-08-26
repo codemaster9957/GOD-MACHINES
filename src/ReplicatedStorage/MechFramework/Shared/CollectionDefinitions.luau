@@ -28,7 +28,7 @@ Definitions.Materials = table.freeze({
 })
 
 -- Stackable=false means each acquired part receives its own identity and condition.
-local parts = {
+local parts: {[string]: any} = {
 	StructuralFrame = { Category = "StructuralFrames", Rarity = "Common", Stackable = true, MaxDurability = 250 },
 	SmallReactor = { Category = "Generators", Rarity = "Uncommon", Stackable = false, MaxDurability = 180 },
 	LightweightEngine = { Category = "Engines", Rarity = "Common", Stackable = false, MaxDurability = 140, Tags = { "Lightweight", "Efficient" } },
