@@ -43,11 +43,13 @@ require("bar", '"F FRAME"', "camera bar exposes frame control")
 require("bar", '"ORBIT"', "camera bar exposes orbit mode")
 require("bar", '"FLY [V]"', "camera bar exposes fly mode")
 
-# Placement-safe double-click focus from the approved Phase 2A plan.
-require("controller", "DOUBLE_CLICK_WINDOW = 0.30", "double-click focus uses the approved 0.30s window")
-require("controller", "lastPrimaryClickAt", "controller tracks primary-click timing")
-require("controller", "if isDoubleClick and not data then", "component focus never steals a valid placement")
-require("controller", "workshopCamera:FocusComponent", "double-click routes the hovered component into WorkshopCamera")
+# Placement-safe double-click focus. WorkshopCamera owns continuous pointer camera gestures;
+# the build controller still owns placement and never exposes server mutation to the camera.
+require("camera", "DOUBLE_CLICK_WINDOW = 0.30", "double-click focus uses the approved 0.30s window")
+require("camera", "self._lastPrimaryClickAt", "camera tracks primary-click timing")
+require("camera", "function WorkshopCamera:_placementGhostValid", "camera can detect when a valid placement must win")
+require("camera", "if isDoubleClick and not self:_placementGhostValid() then", "component focus never steals a valid placement")
+require("camera", "self:FocusComponent(target)", "double-click routes the hovered component into FocusComponent")
 
 # Workspace remains Studio-owned; CurrentCamera is not synced by Rojo.
 require("project", '"syncCurrentCamera": false', "Rojo keeps CurrentCamera Studio-owned")
