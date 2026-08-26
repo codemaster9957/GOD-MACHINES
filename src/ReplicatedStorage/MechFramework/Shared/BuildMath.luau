@@ -36,6 +36,10 @@ function BuildMath.MirrorX(transform: CFrame): CFrame
 	)
 end
 
+function BuildMath.MirrorWorldAcrossLocalX(machinePivot: CFrame, worldTransform: CFrame): CFrame
+	return machinePivot * BuildMath.MirrorX(machinePivot:ToObjectSpace(worldTransform))
+end
+
 -- Old requests stored one integer that rotated around the mounted node's local normal.
 -- Keep it as an explicit legacy path so existing blueprints do not silently rotate differently.
 function BuildMath.LegacyOrientation(turns: any): {[string]: number}

@@ -16,6 +16,14 @@ local NUMBER_KEYS = {
 	[Enum.KeyCode.Nine] = 9,
 }
 
+local function shiftDown(UserInputService)
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+end
+
+local function controlDown(UserInputService)
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+end
+
 function BuildInput.new(UserInputService, callbacks)
 	local self = setmetatable({}, BuildInput)
 	self.Active = false
@@ -40,11 +48,14 @@ function BuildInput.new(UserInputService, callbacks)
 		if input.KeyCode == Enum.KeyCode.KeypadThree then callbacks.CameraView("Right"); return end
 		if input.KeyCode == Enum.KeyCode.KeypadSeven then callbacks.CameraView("Top"); return end
 
+		-- Selection is explicit so ordinary LMB remains the placement tool.
+		if input.KeyCode == Enum.KeyCode.A and controlDown(UserInputService) then callbacks.SelectAll(); return end
+		if input.KeyCode == Enum.KeyCode.Escape then callbacks.ClearSelection(); return end
+
 		-- Construction orientation/snap helpers deliberately avoid X/Y because those are remove/redo.
 		if input.KeyCode == Enum.KeyCode.G then callbacks.CycleRotationAxis(); return end
 		if input.KeyCode == Enum.KeyCode.N then
-			local backwards = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
-			callbacks.CycleSnap(if backwards then -1 else 1)
+			callbacks.CycleSnap(if shiftDown(UserInputService) then -1 else 1)
 			return
 		end
 
@@ -55,7 +66,10 @@ function BuildInput.new(UserInputService, callbacks)
 		if input.KeyCode == Enum.KeyCode.Z then callbacks.Undo(); return end
 		if input.KeyCode == Enum.KeyCode.Y then callbacks.Redo(); return end
 		if input.KeyCode == Enum.KeyCode.T then callbacks.TestMachine(); return end
-		if input.UserInputType == Enum.UserInputType.MouseButton1 then callbacks.Place(); return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			if shiftDown(UserInputService) then callbacks.ToggleSelection() else callbacks.Place() end
+			return
+		end
 	end)
 	return self
 end
