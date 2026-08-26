@@ -68,8 +68,11 @@ structural_basics = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinit
 catalog = text("src/ReplicatedStorage/MechFramework/Shared/PartCatalog.luau")
 preview = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildPreview.luau")
 build_service = text("src/ServerScriptService/MechFramework/Services/BuildService.luau")
+group_service = text("src/ServerScriptService/MechFramework/Services/GroupBuildTransactions.luau")
 selection = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildSelection.luau")
 symmetry_preview = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/SymmetryPreview.luau")
+node_visualizer = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/NodeVisualizer.luau")
+renderer = text("src/ReplicatedStorage/MechFramework/Shared/PartRenderer.luau")
 
 for part_id in (
     "StudBlock", "HalfStudBlock", "LongStudBeam", "StructuralPlate",
@@ -90,9 +93,24 @@ check("BuildSelection" in selection, "BuildSelection module is missing")
 check("SymmetryPreview" in symmetry_preview, "SymmetryPreview module is missing")
 for action in ("GroupDuplicate", "GroupMirror", "GroupRemove", "GroupMove"):
     check(action in build_service, f"BuildService Phase 2 action missing: {action}")
+check("function Group.Duplicate" in group_service, "atomic GroupDuplicate implementation is missing")
+check("function Group.Mirror" in group_service, "atomic GroupMirror implementation is missing")
+check("function Group.Move" in group_service, "atomic GroupMove implementation is missing")
 check("_placeSymmetric" in build_service and "request.Symmetry" in build_service, "BuildService authoritative symmetry placement path is missing")
 check("Orientation=request.Orientation" in controller or "Orientation=data.Orientation" in controller, "client XYZ orientation payload is not sent to server")
 check("ToggleSymmetry" in build_input and "ToggleSelection" in build_input, "Phase 2 build input tools are not exposed")
+
+# Client selection must actually surface the authoritative group routes.
+check('Action="GroupDuplicate"' in controller, "selected components cannot invoke GroupDuplicate")
+check('Action="GroupMirror"' in controller, "selected components cannot invoke GroupMirror")
+check('Action="GroupRemove"' in controller, "selected components cannot invoke GroupRemove")
+check("selection:GetIds()" in controller, "BuildController never sends stable selected component IDs")
+
+# Node metadata/visual direction must survive renderer -> attachment -> visualizer.
+check('SetAttribute("Priority"' in renderer, "renderer does not replicate node Priority to attachments")
+check('SetAttribute("Surface"' in renderer, "renderer does not replicate node Surface to attachments")
+check("DirectionStem" in node_visualizer or "NodeDirection" in node_visualizer, "node visualizer lacks outward direction stem/arrow")
+check("WorldCFrame.LookVector" in node_visualizer, "node direction visual does not follow attachment orientation")
 
 if ERRORS:
     print(f"PHASE 2 VERIFICATION FAILED: {len(ERRORS)} error(s) across {CHECKS} checks")
