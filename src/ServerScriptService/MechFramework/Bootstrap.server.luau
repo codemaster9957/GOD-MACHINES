@@ -53,6 +53,7 @@ local OPTIONAL_ORDER = {
 	"PropulsionService",
 	"AerodynamicsService",
 	"MatchService",
+	"TradeService",
 	"AIService",
 	"NetworkService",
 }
