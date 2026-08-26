@@ -7,6 +7,7 @@ on:
       - feat/vehicle-quick-swap
       - feat/god-machines-finish-pass
       - feature/100-improvements
+      - fix/builder-integrity-pass
   pull_request:
     branches:
       - main
@@ -36,6 +37,9 @@ jobs:
 
       - name: Run builder snap regression spec
         run: python tests/builder_snap_source_spec.py
+
+      - name: Run builder integrity regression spec
+        run: python tests/builder_integrity_source_spec.py
 
       - name: Verify 100-improvement polish contract
         run: python scripts/test_100_improvements_contract.py
