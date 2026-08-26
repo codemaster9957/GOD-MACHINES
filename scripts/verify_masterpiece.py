@@ -157,6 +157,21 @@ check('GetAttributeChangedSignal("GMProfileReady")' in controller, "client does 
 check("TYPE_KEY" in save and "CFrame" in save and "Color3" in save, "DataStore-safe blueprint serialization missing")
 check("wrote=false" in save and "UpdateAsync" in save, "save write-ownership verification missing")
 
+# Vehicle quick-swap integration: persisted slots, transactional replacement, authority and input/UI.
+quick_rules = text("src/ReplicatedStorage/MechFramework/Shared/QuickSwapRules.luau")
+quick_client = text("src/StarterPlayer/StarterPlayerScripts/VehicleQuickSwap.client.luau")
+check("NormalizeSlots" in quick_rules and "NextAssignedSlot" in quick_rules and "CooldownRemaining" in quick_rules, "shared quick-swap rules are incomplete")
+for token in ("QuickSwapSlots", "GetQuickSwapSlots", "SetQuickSwapSlot"):
+    check(token in save, f"quick-swap persistence missing: {token}")
+for token in ("ReplaceBlueprint", "ReturnBuiltPart", "Inventory", "_restore"):
+    check(token in build, f"transactional vehicle replacement missing: {token}")
+for token in ('action=="GetQuickSwapSlots"', 'action=="SetQuickSwapSlot"', 'action=="QuickSwap"', "CooldownRemaining", "NextAssignedSlot"):
+    check(token in pilot, f"PilotService quick-swap authority missing: {token}")
+check('Enum.KeyCode.V' in quick_client and 'Action="QuickSwap"' in quick_client, "V-to-cycle quick-swap client input is missing")
+check("SetQuickSwapSlots" in quick_client and "CooldownEndsAt" in quick_client, "quick-swap HUD/cooldown feedback is incomplete")
+check("AssignQuickSlot" in ui and "AssignQuickSlot" in controller, "Blueprints panel cannot assign saved vehicles to quick slots")
+check('Enum.KeyCode.V' not in weapon_client, "vehicle quick swap conflicts with the machine control adapter")
+
 # Core engineering resource and control expectations.
 for action in ("StrafeLeft", "StrafeRight", "ThrottleForward", "ThrottleReverse", "PitchUp", "PitchDown", "YawLeft", "YawRight", "RollLeft", "RollRight"):
     check(action in control, f"server control action missing: {action}")
