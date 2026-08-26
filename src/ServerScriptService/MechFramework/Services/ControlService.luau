@@ -35,7 +35,7 @@ function Control:SetBindings(userId: number, mechId: string, groups: {[string]: 
 		return false
 	end
 
-	local clean = {
+	local clean: {[string]: {string}} = {
 		Primary = {},
 		Secondary = {},
 	}
@@ -75,7 +75,7 @@ function Control:ReconcileBindings(userId: number, mechId: string): boolean
 		return true
 	end
 
-	local reconciled = {
+	local reconciled: {[string]: {string}} = {
 		Primary = {},
 		Secondary = {},
 	}
