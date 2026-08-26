@@ -14,6 +14,7 @@ local Build={_history={},_future={},_mechs=nil,_parts=nil,_connections=nil,_inve
 local ALLOWED_MATERIALS={Metal=true,SmoothPlastic=true,DiamondPlate=true,CorrodedMetal=true,Granite=true,Slate=true}
 local MAX_BLUEPRINT_COMPONENTS=300
 local MAX_BLUEPRINT_CONNECTIONS=900
+local MAX_GROUP_COMPONENTS=200
 
 local function clone(value)
 	if type(value)~="table" then return value end
@@ -71,6 +72,13 @@ local function choosePrimaryId(mech,preferred)
 	if bestPilot then return bestPilot end
 	local ids={}; for id,component in pairs(mech.Components or {}) do if not component.Destroyed then table.insert(ids,id) end end
 	table.sort(ids); return ids[1]
+end
+local function transformsEquivalent(a,b)
+	if typeof(a)~="CFrame" or typeof(b)~="CFrame" then return false end
+	local delta=a:ToObjectSpace(b)
+	if delta.Position.Magnitude>.04 then return false end
+	local _,angle=delta:ToAxisAngle()
+	return math.abs(angle)<math.rad(1)
 end
 
 function Build:Init(container)
@@ -156,13 +164,16 @@ function Build:_rollbackAdded(mech,componentId,userId,partType,receipt)
 	self:_restoreReceipt(userId,receipt,partType); self._mechs:MarkChanged(mech.Id)
 end
 
-function Build:_place(player,request,appearance)
+function Build:_place(player,request,appearance,options)
+	options=options or {}
 	local userId=player.UserId
 	if type(request.PartType)~="string" then return false,"BadPartType" end
 	local definition=self._parts:Get(request.PartType); if not definition then return false,"UnknownPartType" end
 	local partType=definition.Id
 	local mirrorX=if request.MirrorX~=nil then request.MirrorX==true else type(appearance)=="table" and appearance.MirrorX==true
 	local paint=definition.PaintDefaults or {}; if type(appearance)=="table" and type(appearance.Paint)=="table" then paint=appearance.Paint end
+	local orientationValue=if request.Orientation~=nil then BuildMath.NormalizeOrientation(request.Orientation) else tonumber(request.Rotation) or 0
+	local storedOrientation=BuildMath.NormalizeOrientation(orientationValue)
 	local mechId=request.MechId
 	if mechId~=nil and type(mechId)~="string" then return false,"BadMechId" end
 	if not mechId then mechId=self._mechs:Create(userId,{BuildOrigin=true}) end
@@ -178,19 +189,19 @@ function Build:_place(player,request,appearance)
 		if not targetNode or not sourceNode then return false,"InvalidNode" end
 		if targetNode.OccupiedBy then return false,"NodeOccupied" end
 		if not BuildMath.Compatible(targetNode,sourceNode) then return false,"IncompatibleNode" end
-		transform=BuildMath.Snap(target.LocalTransform,targetNode.Transform,sourceNode.Transform,tonumber(request.Rotation) or 0)
+		transform=BuildMath.Snap(target.LocalTransform,targetNode.Transform,sourceNode.Transform,orientationValue)
 	elseif next(mech.Components or {})~=nil then return false,"AttachmentRequired" end
 
 	if typeof(transform)~="CFrame" then return false,"InvalidTransform" end
 	if not self:_clearance(definition,transform) then return false,"Collision" end
-	local before=self:_snapshot(mechId,userId)
+	local before=options.Before or self:_snapshot(mechId,userId)
 	local consumed,receipt=self._inventory:ConsumeOne(userId,partType)
 	if not consumed then return false,receipt or "InsufficientInventory" end
 	if conditionRatioFromReceipt(receipt)<=0 then self:_restoreReceipt(userId,receipt,partType); return false,"PartNeedsRepair" end
 
 	local nodes=BuildMath.AttachmentNodes(definition,mirrorX); for _,node in pairs(nodes) do node.OccupiedBy=nil end
 	local added,componentId=self._mechs:AddComponent(mechId,userId,partType,transform,{
-		AttachmentNodes=nodes,Paint=clone(paint),MirrorX=mirrorX,InventoryReceipt=clone(receipt),
+		AttachmentNodes=nodes,Paint=clone(paint),MirrorX=mirrorX,Orientation=clone(storedOrientation),InventoryReceipt=clone(receipt),
 	})
 	if not added then self:_restoreReceipt(userId,receipt,partType); return false,componentId end
 	local component=mech.Components[componentId]; if component then applyReceiptCondition(component,receipt) end
@@ -204,8 +215,77 @@ function Build:_place(player,request,appearance)
 		local attached,edge=self._connections:Attach(mechId,userId,target.Id,componentId,{SocketA=request.TargetNode,SocketB=request.SourceNode,StructuralStrength=math.min(targetStrength,sourceStrength)})
 		if not attached then actualTargetNode.OccupiedBy=nil; actualSourceNode.OccupiedBy=nil; self:_rollbackAdded(mech,componentId,userId,partType,receipt); return false,edge end
 	end
-	self:_record(userId,mechId,before); self:_realize(mechId)
-	return true,{MechId=mechId,ComponentId=componentId,Revision=mech.Revision,MirrorX=mirrorX,Paint=clone(paint)}
+	if not options.SuppressRecord then self:_record(userId,mechId,before) end
+	if not options.SuppressRealize then self:_realize(mechId) end
+	return true,{MechId=mechId,ComponentId=componentId,Revision=mech.Revision,MirrorX=mirrorX,Paint=clone(paint),Transform=transform,Orientation=clone(storedOrientation)}
+end
+
+function Build:_findSocketForTransform(mech,definition,mirrorX,transform,ignoredIds)
+	local sourceNodes=BuildMath.AttachmentNodes(definition,mirrorX)
+	local best=nil
+	for targetId,target in pairs(mech.Components or {}) do
+		if not target.Destroyed and not (ignoredIds and ignoredIds[targetId]) then
+			for _,targetNode in pairs(target.Metadata and target.Metadata.AttachmentNodes or {}) do
+				if not targetNode.OccupiedBy and typeof(targetNode.Transform)=="CFrame" then
+					local targetWorld=target.LocalTransform*targetNode.Transform
+					for _,sourceNode in ipairs(sourceNodes) do
+						if not sourceNode.OccupiedBy and BuildMath.Compatible(targetNode,sourceNode) then
+							local sourceWorld=transform*sourceNode.Transform
+							local distance=(targetWorld.Position-sourceWorld.Position).Magnitude
+							local facing=targetWorld.LookVector:Dot(sourceWorld.LookVector)
+							if distance<=.18 and facing<=-.96 then
+								local score=distance+(facing+1)*.05
+								if not best or score<best.Score then best={Target=target,TargetNode=targetNode,SourceNode=sourceNode,Score=score} end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+function Build:_placeSymmetric(player,request)
+	if type(request.MechId)~="string" then return false,"SymmetryRequiresExistingMech" end
+	local mech=self._mechs:Get(request.MechId); if not mech or mech.Owner~=player.UserId then return false,"NotAuthorized" end
+	local model=self:_model(request.MechId); if model:GetAttribute("EditMode")==false then return false,"EnterEditModeFirst" end
+	local before=self:_snapshot(request.MechId,player.UserId)
+	local pivot=if model.PrimaryPart then model.PrimaryPart.CFrame else model:GetPivot()
+	local primaryRequest=clone(request); primaryRequest.Symmetry=nil
+	local ok,primary=self:_place(player,primaryRequest,nil,{Before=before,SuppressRecord=true,SuppressRealize=true})
+	if not ok then return false,primary end
+	local definition=self._parts:Get(request.PartType); if not definition then self:_restore(request.MechId,before,player.UserId); return false,"UnknownPartType" end
+	local mirroredTransform=BuildMath.MirrorWorldAcrossLocalX(pivot,primary.Transform)
+	if transformsEquivalent(primary.Transform,mirroredTransform) then
+		self:_record(player.UserId,request.MechId,before); self:_realize(request.MechId)
+		return true,{MechId=request.MechId,ComponentId=primary.ComponentId,SymmetryCount=1,Revision=mech.Revision}
+	end
+
+	-- Realize the primary half before clearance so the mirror cannot overlap it unnoticed.
+	self:_realize(request.MechId)
+	if not self:_clearance(definition,mirroredTransform) then self:_restore(request.MechId,before,player.UserId); return false,"SymmetryCollision" end
+	local mirroredMirrorX=not (primary.MirrorX==true)
+	local socket=self:_findSocketForTransform(mech,definition,mirroredMirrorX,mirroredTransform,{[primary.ComponentId]=true})
+	if not socket then self:_restore(request.MechId,before,player.UserId); return false,"SymmetryNoConnection" end
+	local consumed,receipt=self._inventory:ConsumeOne(player.UserId,definition.Id)
+	if not consumed then self:_restore(request.MechId,before,player.UserId); return false,receipt or "InsufficientInventory" end
+	if conditionRatioFromReceipt(receipt)<=0 then self:_restore(request.MechId,before,player.UserId); return false,"PartNeedsRepair" end
+	local nodes=BuildMath.AttachmentNodes(definition,mirroredMirrorX); for _,node in pairs(nodes) do node.OccupiedBy=nil end
+	local added,componentId=self._mechs:AddComponent(request.MechId,player.UserId,definition.Id,mirroredTransform,{
+		AttachmentNodes=nodes,Paint=clone(primary.Paint or definition.PaintDefaults or {}),MirrorX=mirroredMirrorX,SymmetryAxis="X",InventoryReceipt=clone(receipt),
+	})
+	if not added then self:_restore(request.MechId,before,player.UserId); return false,componentId end
+	local component=mech.Components[componentId]; if component then applyReceiptCondition(component,receipt) end
+	local targetNode=nodeMap(socket.Target)[socket.TargetNode.Name]; local sourceNode=component and nodeMap(component)[socket.SourceNode.Name] or nil
+	if not targetNode or not sourceNode or targetNode.OccupiedBy then self:_restore(request.MechId,before,player.UserId); return false,"SymmetryNodeState" end
+	targetNode.OccupiedBy=componentId; sourceNode.OccupiedBy=socket.Target.Id
+	local targetStrength=socket.Target.PhysicalProperties and socket.Target.PhysicalProperties.StructuralStrength or 100
+	local sourceStrength=component.PhysicalProperties and component.PhysicalProperties.StructuralStrength or 100
+	local attached,edge=self._connections:Attach(request.MechId,player.UserId,socket.Target.Id,componentId,{SocketA=socket.TargetNode.Name,SocketB=socket.SourceNode.Name,StructuralStrength=math.min(targetStrength,sourceStrength)})
+	if not attached then self:_restore(request.MechId,before,player.UserId); return false,edge or "SymmetryAttachFailed" end
+	self:_record(player.UserId,request.MechId,before); self:_realize(request.MechId)
+	return true,{MechId=request.MechId,ComponentId=primary.ComponentId,MirroredComponentId=componentId,SymmetryCount=2,Revision=mech.Revision}
 end
 
 function Build:_remove(player,request)
@@ -234,6 +314,48 @@ function Build:_remove(player,request)
 	local empty=next(mech.Components)==nil
 	if empty then self:_destroyRealized(request.MechId) else self:_realize(request.MechId) end
 	return true,{MechId=request.MechId,Revision=mech.Revision,Empty=empty}
+end
+
+function Build:_groupRemove(player,request)
+	if type(request.MechId)~="string" or type(request.ComponentIds)~="table" then return false,"BadGroupRequest" end
+	if #request.ComponentIds<1 or #request.ComponentIds>MAX_GROUP_COMPONENTS then return false,"InvalidGroupSize" end
+	local mech=self._mechs:Get(request.MechId); if not mech or mech.Owner~=player.UserId then return false,"NotAuthorized" end
+	if self:_model(request.MechId):GetAttribute("EditMode")==false then return false,"EnterEditModeFirst" end
+	local selected={}; local ids={}
+	for _,componentId in ipairs(request.ComponentIds) do
+		if type(componentId)~="string" or selected[componentId] then return false,"InvalidGroupComponent" end
+		local component=mech.Components[componentId]; if not component then return false,"InvalidComponent" end
+		selected[componentId]=true; table.insert(ids,componentId)
+	end
+	table.sort(ids)
+	local before=self:_snapshot(request.MechId,player.UserId)
+	local edgeIds={}
+	for _,componentId in ipairs(ids) do for edgeId in pairs(mech.Components[componentId].Connections or {}) do edgeIds[edgeId]=true end end
+	for edgeId in pairs(edgeIds) do
+		local edge=mech.Connections[edgeId]
+		if edge then
+			local aSelected,bSelected=selected[edge.A],selected[edge.B]
+			if aSelected~=bSelected then
+				local survivorId=if aSelected then edge.B else edge.A; local removedId=if aSelected then edge.A else edge.B
+				local survivor=mech.Components[survivorId]
+				if survivor then for _,node in pairs(survivor.Metadata and survivor.Metadata.AttachmentNodes or {}) do if node.OccupiedBy==removedId then node.OccupiedBy=nil end end end
+			end
+		end
+		self._connections:Detach(request.MechId,player.UserId,edgeId)
+	end
+	for _,componentId in ipairs(ids) do
+		local component=mech.Components[componentId]
+		local ratio=math.clamp((tonumber(component.Health) or 0)/math.max(1,tonumber(component.MaxHealth) or 1),0,1)
+		if not self._inventory:ReturnBuiltPart(player.UserId,component.PartType,component.Metadata and component.Metadata.InventoryReceipt,ratio) then
+			self:_restore(request.MechId,before,player.UserId); return false,"InventoryReturnFailed"
+		end
+		mech.Components[componentId]=nil; if mech.Adjacency then mech.Adjacency[componentId]=nil end
+	end
+	mech.Metadata=mech.Metadata or {}; mech.Metadata.PrimaryComponentId=choosePrimaryId(mech)
+	self._mechs:MarkChanged(request.MechId); self:_record(player.UserId,request.MechId,before)
+	local empty=next(mech.Components)==nil
+	if empty then self:_destroyRealized(request.MechId) else self:_realize(request.MechId) end
+	return true,{MechId=request.MechId,Removed=#ids,Empty=empty,Revision=mech.Revision}
 end
 
 function Build:_move(player,request)
@@ -271,7 +393,7 @@ function Build:_appearance(player,request)
 	local mech=self._mechs:Get(request.MechId); if not mech or mech.Owner~=player.UserId then return false,"NotAuthorized" end
 	local source=mech.Components[request.ComponentId]; if not source or source.Destroyed then return false,"InvalidComponent" end
 	local definition=self._parts:Get(source.PartType); if not definition then return false,"UnknownPartType" end
-	return true,{PartType=definition.Id,Paint=clone(source.Metadata and source.Metadata.Paint or definition.PaintDefaults or {}),MirrorX=source.Metadata and source.Metadata.MirrorX==true}
+	return true,{PartType=definition.Id,Paint=clone(source.Metadata and source.Metadata.Paint or definition.PaintDefaults or {}),MirrorX=source.Metadata and source.Metadata.MirrorX==true,Orientation=clone(source.Metadata and source.Metadata.Orientation or {X=0,Y=0,Z=0})}
 end
 
 function Build:_duplicate(player,request)
@@ -281,6 +403,7 @@ function Build:_duplicate(player,request)
 	local definition=self._parts:Get(source.PartType); if not definition then return false,"UnknownPartType" end
 	request.PartType=definition.Id
 	local appearance={Paint=clone(source.Metadata and source.Metadata.Paint or definition.PaintDefaults or {}),MirrorX=source.Metadata and source.Metadata.MirrorX==true}
+	if type(request.Symmetry)=="table" then return self:_placeSymmetric(player,request) end
 	return self:_place(player,request,appearance)
 end
 
@@ -325,8 +448,9 @@ function Build:Start()
 		if action=="Definition" then if type(request.PartType)~="string" then return false,"BadPartType" end; local definition=self._parts:Get(request.PartType); return definition~=nil,definition
 		elseif action=="Appearance" then return self:_appearance(player,request)
 		elseif action=="Inventory" then return self:_inventoryCounts(player)
-		elseif action=="Place" then return self:_place(player,request)
+		elseif action=="Place" then if type(request.Symmetry)=="table" then return self:_placeSymmetric(player,request) end; return self:_place(player,request)
 		elseif action=="Remove" then return self:_remove(player,request)
+		elseif action=="GroupRemove" then return self:_groupRemove(player,request)
 		elseif action=="Move" then return self:_move(player,request)
 		elseif action=="Paint" then return self:_paint(player,request)
 		elseif action=="Duplicate" then return self:_duplicate(player,request)
