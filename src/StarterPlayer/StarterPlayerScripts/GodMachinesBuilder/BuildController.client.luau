@@ -351,7 +351,7 @@ local function refreshQuickSlots(silent)
 	local success,result=machineInvoke({Action="GetQuickSwapSlots"},6)
 	if success and type(result)=="table" then
 		ui:SetQuickSwapSlots(result)
-		(quickSwapBridge::BindableEvent):Fire(result)
+		;(quickSwapBridge::BindableEvent):Fire(result)
 		return true
 	end
 	if not silent then status(result or "QUICK SLOT REFRESH FAILED","bad",1) end
@@ -364,7 +364,7 @@ local function assignQuickSlot(slot,name)
 	local success,result=machineInvoke({Action="SetQuickSwapSlot",Slot=slot,Name=name},6)
 	if success and type(result)=="table" then
 		ui:SetQuickSwapSlots(result)
-		(quickSwapBridge::BindableEvent):Fire(result)
+		;(quickSwapBridge::BindableEvent):Fire(result)
 		status(if name=="" then "QUICK SLOT "..slot.." CLEARED" else "QUICK SLOT "..slot..": "..name,"good",1)
 	else status(result or "QUICK SLOT UPDATE FAILED","bad",1) end
 end
