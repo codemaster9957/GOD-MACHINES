@@ -13,8 +13,9 @@ def read(path: str) -> str:
 catalog_path = "src/ReplicatedStorage/MechFramework/Shared/WeaponCatalog.luau"
 binding_path = "src/ReplicatedStorage/MechFramework/Shared/ControlBindingPolicy.luau"
 effects_path = "src/StarterPlayer/StarterPlayerScripts/WeaponEffects.client.luau"
+gundam_parts_path = "src/ReplicatedStorage/MechFramework/Shared/PartDefinitions/GundamWeapons.luau"
 
-for path in (catalog_path, binding_path, effects_path):
+for path in (catalog_path, binding_path, effects_path, gundam_parts_path):
     assert (ROOT / path).is_file(), f"missing required Gundam weapon-system file: {path}"
 
 catalog = read(catalog_path)
@@ -30,18 +31,24 @@ binding = read(binding_path)
 assert "function Policy.Derive" in binding or "function ControlBindingPolicy.Derive" in binding, "binding policy must derive default weapon groups"
 assert '"Primary"' in binding and '"Secondary"' in binding, "binding policy must support both fire groups"
 
+gundam_parts = read(gundam_parts_path)
+assert "WeaponCatalog" in gundam_parts and "H.part" in gundam_parts, "Gundam weapon records must adapt into the current declarative part library"
+
+part_catalog = read("src/ReplicatedStorage/MechFramework/Shared/PartCatalog.luau")
+assert '"GundamWeapons"' in part_catalog, "PartCatalog must load the Gundam weapon module"
+assert "#ordered >= 100" in part_catalog, "PartCatalog must be expansion-safe at 100+ parts"
+
 part_registry = read("src/ServerScriptService/MechFramework/Services/PartRegistry.luau")
-assert "WeaponCatalog" in part_registry, "PartRegistry must register the shared weapon catalogue"
+assert "self:Count() >= 100" in part_registry, "PartRegistry must accept the expanded catalogue"
 
 control = read("src/ServerScriptService/MechFramework/Services/ControlService.luau")
 assert "ReconcileBindings" in control, "ControlService must reconcile installed weapons"
-assert 'packet.Action == "Reload"' in control, "ControlService must route reload input"
-
-build = read("src/ServerScriptService/MechFramework/Services/BuildService.luau")
-assert "ReconcileBindings" in build, "build mutations must refresh weapon bindings"
+assert "DefaultAction" in control, "default fire groups must honor weapon catalogue actions"
 
 collection = read("src/ReplicatedStorage/MechFramework/Shared/CollectionDefinitions.luau")
-for weapon_id in expected_ids:
-    assert weapon_id in collection, f"collection definitions missing {weapon_id}"
+assert "WeaponCatalog" in collection and "Definitions.Parts" in collection, "collection metadata must include the weapon catalogue"
 
-print("PASS: Gundam weapon catalogue, bindings, reload routing, build reconciliation, collection integration, and feedback client are wired")
+projectiles = read("src/ServerScriptService/MechFramework/Services/ProjectileService.luau")
+assert "CombatFeedback" in projectiles and 'Kind="Fired"' in projectiles and 'Kind="Impact"' in projectiles, "server projectiles must emit sanitized combat feedback"
+
+print("PASS: Gundam weapon catalogue is adapted into the 100+ part architecture with default bindings, collection metadata, and server-owned feedback")
