@@ -181,7 +181,10 @@ local function updateTarget()
 	local activeMech=player:GetAttribute("ActiveMechId")
 	local combatActive=player:GetAttribute("BuildMode")~=true and type(activeMech)=="string" and activeMech~=""
 	combatHud.Visible=combatActive
-	controlsChip.Visible=combatActive and attr("ControlHelp")~=false and not attr("HideHints")
+	local density=math.clamp(tonumber(attr("ChipDensity")) or 1,0,2)
+	targetChip.Visible=combatActive and density>=1
+	inputChip.Visible=combatActive and density>=1
+	controlsChip.Visible=combatActive and density>=2 and attr("ControlHelp")~=false and not attr("HideHints")
 	if not combatActive then clearTarget(); return end
 	local target=Mouse.Target
 	local component,mech,mechId,componentId=findTarget(target)
@@ -243,7 +246,8 @@ local function setFavoritesFilter(enabled)
 end
 local function updateWorkshopChip()
 	local w=workshopGui(); local active=player:GetAttribute("BuildMode")==true and w~=nil
-	workshopChip.Visible=active and not attr("HideHints")
+	local density=math.clamp(tonumber(attr("ChipDensity")) or 1,0,2)
+	workshopChip.Visible=active and density>=1 and not attr("HideHints")
 	if not active then return end
 	local grid=catalogGrid(); local visible,total=0,0
 	if grid then for _,card in ipairs(grid:GetChildren()) do if card:IsA("GuiObject") and card.Name:sub(1,5)=="Card_" then total+=1; if card.Visible then visible+=1 end end end end
@@ -255,6 +259,9 @@ end
 local tooltip=frame(gui,"Tooltip",UDim2.fromOffset(260,32),UDim2.fromOffset(0,0)); tooltip.Visible=false; tooltip.ZIndex=200
 local tooltipText=label(tooltip,"",UDim2.new(1,-12,1,0),UDim2.fromOffset(6,0),9,true); tooltipText.TextTruncate=Enum.TextTruncate.AtEnd; tooltipText.ZIndex=201
 local tooltipToken=0
+local overlayShade=nil
+local commandPalette=nil
+local settingsPanel=nil
 local function bindTooltip(object)
 	if tooltipConnections[object] or not object:IsA("GuiButton") or object:IsDescendantOf(gui) then return end
 	local entered=object.MouseEnter:Connect(function()
@@ -286,6 +293,18 @@ local function applyAccessibility()
 	local large=attr("LargeText")==true
 	local high=attr("HighContrast")==true
 	local hudOpacity=math.clamp(tonumber(attr("HUDOpacity")) or 1,.35,1)
+	local panelOpacity=math.clamp(tonumber(attr("PanelOpacity")) or 1,.3,1)
+	local compact=attr("CompactHUD")==true
+	local safe=math.clamp(tonumber(attr("SafeMargin")) or 16,0,64)
+	toastHost.Position=UDim2.new(1,-safe,0,safe)
+	workshopChip.Position=UDim2.new(1,-(compact and 346 or 376),1,-(56+safe))
+	workshopChip.Size=UDim2.fromOffset(compact and 330 or 360,compact and 46 or 54)
+	targetChip.Size=UDim2.fromOffset(compact and 220 or 270,compact and 28 or 34)
+	targetChip.Position=UDim2.new(.5,-(compact and 110 or 135),.5,34)
+	inputChip.Size=UDim2.fromOffset(compact and 142 or 178,compact and 24 or 28)
+	inputChip.Position=UDim2.new(.5,-(compact and 71 or 89),.5,compact and 66 or 74)
+	controlsChip.Size=UDim2.fromOffset(compact and 360 or 420,compact and 28 or 34)
+	controlsChip.Position=UDim2.new(.5,-(compact and 180 or 210),1,-(38+safe))
 	for _,screen in ipairs(playerGui:GetChildren()) do
 		if not screen:IsA("ScreenGui") then continue end
 		for _,root in ipairs(screen:GetChildren()) do
@@ -311,18 +330,25 @@ local function applyAccessibility()
 		local base=tonumber(d:GetAttribute("GMQoLBaseTransparency")) or 0
 		d.BackgroundTransparency=1-(1-base)*hudOpacity
 	end end
+	for _,panelItem in ipairs({workshopChip,targetChip,controlsChip,inputChip,commandPalette,settingsPanel}) do
+		if panelItem then
+			if panelItem:GetAttribute("GMQoLBasePanelTransparency")==nil then panelItem:SetAttribute("GMQoLBasePanelTransparency",panelItem.BackgroundTransparency) end
+			local base=tonumber(panelItem:GetAttribute("GMQoLBasePanelTransparency")) or 0
+			panelItem.BackgroundTransparency=1-(1-base)*panelOpacity
+		end
+	end
 	workshopChip.Visible=workshopChip.Visible and not attr("HideHints")
 end
 
-local overlayShade=Instance.new("Frame"); overlayShade.Name="OverlayShade"; overlayShade.Size=UDim2.fromScale(1,1); overlayShade.BackgroundColor3=colors.bg; overlayShade.BackgroundTransparency=.35; overlayShade.BorderSizePixel=0; overlayShade.Visible=false; overlayShade.Parent=gui
+overlayShade=Instance.new("Frame"); overlayShade.Name="OverlayShade"; overlayShade.Size=UDim2.fromScale(1,1); overlayShade.BackgroundColor3=colors.bg; overlayShade.BackgroundTransparency=.35; overlayShade.BorderSizePixel=0; overlayShade.Visible=false; overlayShade.Parent=gui
 
-local commandPalette=frame(gui,"CommandPalette",UDim2.fromOffset(520,360),UDim2.new(.5,-260,.18,0)); commandPalette.Visible=false; commandPalette.ZIndex=110
+commandPalette=frame(gui,"CommandPalette",UDim2.fromOffset(520,360),UDim2.new(.5,-260,.18,0)); commandPalette.Visible=false; commandPalette.ZIndex=110
 local commandTitle=label(commandPalette,"COMMAND PALETTE   [CTRL+K]",UDim2.new(1,-28,0,30),UDim2.fromOffset(14,10),13,true); commandTitle.TextColor3=colors.amber; commandTitle.ZIndex=111
 local commandSearch=Instance.new("TextBox"); commandSearch.Name="CommandSearch"; commandSearch.Size=UDim2.new(1,-28,0,38); commandSearch.Position=UDim2.fromOffset(14,48); commandSearch.BackgroundColor3=colors.bg; commandSearch.BorderSizePixel=0; commandSearch.PlaceholderText="SEARCH COMMANDS..."; commandSearch.ClearTextOnFocus=false; commandSearch.Text=""; commandSearch.TextColor3=colors.text; commandSearch.PlaceholderColor3=colors.muted; commandSearch.TextSize=12; commandSearch.Font=Enum.Font.GothamMedium; commandSearch.ZIndex=111; commandSearch.Parent=commandPalette; corner(commandSearch,6); stroke(commandSearch,colors.line,.1,1)
 local commandList=Instance.new("ScrollingFrame"); commandList.Name="CommandList"; commandList.Position=UDim2.fromOffset(14,96); commandList.Size=UDim2.new(1,-28,1,-110); commandList.BackgroundTransparency=1; commandList.BorderSizePixel=0; commandList.ScrollBarThickness=3; commandList.AutomaticCanvasSize=Enum.AutomaticSize.Y; commandList.CanvasSize=UDim2.new(); commandList.ZIndex=111; commandList.Parent=commandPalette
 local commandLayout=Instance.new("UIListLayout"); commandLayout.Padding=UDim.new(0,6); commandLayout.Parent=commandList
 
-local settingsPanel=frame(gui,"QoLSettings",UDim2.fromOffset(560,560),UDim2.new(.5,-280,.5,-280)); settingsPanel.Visible=false; settingsPanel.ZIndex=115
+settingsPanel=frame(gui,"QoLSettings",UDim2.fromOffset(560,560),UDim2.new(.5,-280,.5,-280)); settingsPanel.Visible=false; settingsPanel.ZIndex=115
 local settingsTitle=label(settingsPanel,"QUALITY OF LIFE   •   100 IMPROVEMENTS",UDim2.new(1,-110,0,34),UDim2.fromOffset(16,10),14,true); settingsTitle.TextColor3=colors.amber; settingsTitle.ZIndex=116
 local settingsClose=button(settingsPanel,"CLOSE [F10]",UDim2.fromOffset(94,30),UDim2.new(1,-108,0,10)); settingsClose.ZIndex=116
 local settingsScroll=Instance.new("ScrollingFrame"); settingsScroll.Position=UDim2.fromOffset(14,54); settingsScroll.Size=UDim2.new(1,-28,1,-68); settingsScroll.BackgroundTransparency=1; settingsScroll.BorderSizePixel=0; settingsScroll.ScrollBarThickness=4; settingsScroll.AutomaticCanvasSize=Enum.AutomaticSize.Y; settingsScroll.CanvasSize=UDim2.new(); settingsScroll.ZIndex=116; settingsScroll.Parent=settingsPanel
@@ -390,6 +416,7 @@ settingRow("HighContrast","HIGH CONTRAST")
 settingRow("ReducedMotion","REDUCED MOTION")
 settingRow("UIScale","UI SCALE",{.8,.9,1,1.1,1.2,1.3})
 settingRow("HUDOpacity","HUD OPACITY",{.45,.6,.75,.9,1})
+settingRow("PanelOpacity","PANEL OPACITY",{.4,.55,.7,.85,1})
 settingRow("SafeMargin","SAFE MARGIN",{8,16,24,32,40})
 settingRow("CompactHUD","COMPACT HUD")
 settingRow("Tooltips","TOOLTIPS")
