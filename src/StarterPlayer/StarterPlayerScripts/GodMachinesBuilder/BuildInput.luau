@@ -31,10 +31,7 @@ function BuildInput.new(UserInputService, callbacks)
 		if processed then return end
 
 		-- B always enters/leaves the workshop, including returning from Test Mode.
-		if input.KeyCode == Enum.KeyCode.B then
-			callbacks.Toggle()
-			return
-		end
+		if input.KeyCode == Enum.KeyCode.B then callbacks.Toggle(); return end
 		if not self.Active then return end
 
 		local slot = NUMBER_KEYS[input.KeyCode]
@@ -52,8 +49,9 @@ function BuildInput.new(UserInputService, callbacks)
 		if input.KeyCode == Enum.KeyCode.A and controlDown(UserInputService) then callbacks.SelectAll(); return end
 		if input.KeyCode == Enum.KeyCode.Escape then callbacks.ClearSelection(); return end
 
-		-- Construction orientation/snap helpers deliberately avoid X/Y because those are remove/redo.
+		-- Construction orientation/snap/symmetry helpers deliberately avoid X/Y because those are remove/redo.
 		if input.KeyCode == Enum.KeyCode.G then callbacks.CycleRotationAxis(); return end
+		if input.KeyCode == Enum.KeyCode.H then callbacks.ToggleSymmetry(); return end
 		if input.KeyCode == Enum.KeyCode.N then
 			callbacks.CycleSnap(if shiftDown(UserInputService) then -1 else 1)
 			return
