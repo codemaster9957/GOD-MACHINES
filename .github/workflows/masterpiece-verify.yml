@@ -6,6 +6,7 @@ on:
       - feat/masterpiece-builder-v2
       - feat/vehicle-quick-swap
       - feat/god-machines-finish-pass
+      - feature/100-improvements
   pull_request:
     branches:
       - main
@@ -29,6 +30,9 @@ jobs:
 
       - name: Verify GOD MACHINES architecture
         run: python scripts/verify_masterpiece.py
+
+      - name: Verify 100-improvement polish contract
+        run: python scripts/test_100_improvements_contract.py
 
   luau-syntax:
     name: Compile and test Luau
