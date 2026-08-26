@@ -64,7 +64,7 @@ check("WorkshopCameraBar" in controller, "BuildController must mount the compact
 # P2-B build geometry / nodes / symmetry contract.
 helpers = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinitionHelpers.luau")
 build_math = text("src/ReplicatedStorage/MechFramework/Shared/BuildMath.luau")
-structural = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinitions/Structural.luau")
+structural_basics = text("src/ReplicatedStorage/MechFramework/Shared/PartDefinitions/StructuralBasics.luau")
 catalog = text("src/ReplicatedStorage/MechFramework/Shared/PartCatalog.luau")
 preview = text("src/StarterPlayer/StarterPlayerScripts/GodMachinesBuilder/BuildPreview.luau")
 build_service = text("src/ServerScriptService/MechFramework/Services/BuildService.luau")
@@ -75,11 +75,12 @@ for part_id in (
     "StudBlock", "HalfStudBlock", "LongStudBeam", "StructuralPlate",
     "CornerBlock", "TriangularBlock", "RoundStructuralCell",
 ):
-    check(f'"{part_id}"' in structural, f"missing Phase 2 structural part: {part_id}")
+    check(f'"{part_id}"' in structural_basics, f"missing Phase 2 structural part: {part_id}")
 
 check("function H.faceGridNodes" in helpers, "face-grid node helper is missing")
 check("function H.mergeNodes" in helpers, "node merge helper is missing")
 check("OrientationCFrame" in build_math, "BuildMath normalized XYZ orientation helper is missing")
+check("MirrorWorldAcrossLocalX" in build_math, "BuildMath authoritative symmetry reflection helper is missing")
 check("LegacyOrientation" in build_math or "NormalizeOrientation" in build_math, "legacy rotation compatibility helper is missing")
 check("#ordered >= 100" in catalog or "#ordered < 100" in catalog, "catalog validation is still exact-100 only")
 check("StudBlock" in catalog, "catalog required-ID validation does not include Phase 2 structures")
@@ -87,8 +88,11 @@ check("CycleSnap" in preview, "BuildPreview snap candidate cycling is missing")
 check("SnapCandidates" in preview or "_rankCompatiblePairs" in preview, "BuildPreview deterministic snap ranking is missing")
 check("BuildSelection" in selection, "BuildSelection module is missing")
 check("SymmetryPreview" in symmetry_preview, "SymmetryPreview module is missing")
-for action in ("GroupDuplicate", "GroupMirror", "GroupRemove", "GroupMove", "SymmetryPlace"):
+for action in ("GroupDuplicate", "GroupMirror", "GroupRemove", "GroupMove"):
     check(action in build_service, f"BuildService Phase 2 action missing: {action}")
+check("_placeSymmetric" in build_service and "request.Symmetry" in build_service, "BuildService authoritative symmetry placement path is missing")
+check("Orientation=request.Orientation" in controller or "Orientation=data.Orientation" in controller, "client XYZ orientation payload is not sent to server")
+check("ToggleSymmetry" in build_input and "ToggleSelection" in build_input, "Phase 2 build input tools are not exposed")
 
 if ERRORS:
     print(f"PHASE 2 VERIFICATION FAILED: {len(ERRORS)} error(s) across {CHECKS} checks")
