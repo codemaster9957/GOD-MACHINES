@@ -1,6 +1,8 @@
 --!strict
 -- Data-only collection content. Rarity describes scarcity/specialisation, not power.
-local WeaponCatalog = require(script.Parent.WeaponCatalog)\n\nlocal Definitions = {}
+local WeaponCatalog = require(script.Parent.WeaponCatalog)
+
+local Definitions = {}
 
 Definitions.Rarities = table.freeze({
 	Common = { Scarcity = 1, TradeLabel = "Industrial" },
