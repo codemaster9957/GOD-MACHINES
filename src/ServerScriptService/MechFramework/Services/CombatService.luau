@@ -589,30 +589,31 @@ end
 --------------------------------------------------
 
 function Combat:Reload(
+	userId: number,
 	mechId: string,
-	weaponId: string,
-	amount: number
-): boolean
+	weaponId: string
+): (boolean, string?)
 
-	-- mechId is retained because reload logic may later
-	-- need magazines/ammo storage from the mech.
-	local _ = mechId
-
-	if amount <= 0 then
-		return false
+	local mech = self._mechs:Get(mechId)
+	if not mech or mech.Owner ~= userId then
+		return false, "NotAuthorized"
 	end
 
-	local ammoMap: NumberMap =
-		self._ammo
+	local weapon = self._mechs:GetComponent(mechId, weaponId)
+	if not weapon or weapon.Destroyed == true or type(weapon.Combat) ~= "table" then
+		return false, "InvalidWeapon"
+	end
 
-	local stateKey = runtimeKey(mechId, weaponId)
-	local currentAmmo =
-		ammoMap[stateKey] or 0
+	local config = Definitions.Resolve(weapon.Combat)
+	local ammoUsage = math.max(0, tonumber(config.AmmoUsage) or 0)
+	local capacity = math.max(0, tonumber(config.AmmoCapacity) or 0)
+	if ammoUsage <= 0 or capacity <= 0 then
+		return false, "NoMagazine"
+	end
 
-	ammoMap[stateKey] =
-		currentAmmo + amount
-
-	return true
+	local ammoMap: NumberMap = self._ammo
+	ammoMap[runtimeKey(mechId, weaponId)] = capacity
+	return true, nil
 end
 
 --------------------------------------------------
