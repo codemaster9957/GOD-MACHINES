@@ -48,6 +48,16 @@ def test_global_controller_wires_real_qol_surfaces():
         assert needle in text, f'missing global QoL behavior: {needle}'
 
 
+def test_qol_text_focus_cannot_strand_character_movement():
+    text = read(CONTROLLER)
+    assert 'local function releaseOwnedFocus()' in text
+    assert 'focused:IsDescendantOf(gui)' in text
+    assert 'focused:ReleaseFocus()' in text
+    assert 'elseif focused==workshopSearch() then' in text
+    assert 'focused.Text~=""' not in text
+    assert 'player:GetAttribute("BuildMode")~=true then releaseOwnedFocus()' in text
+
+
 def test_builder_aliases_are_real_inputs():
     text = read(BUILD_INPUT)
     for needle in [
