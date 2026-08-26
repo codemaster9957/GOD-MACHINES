@@ -37,6 +37,9 @@ jobs:
       - name: Verify 100-improvement polish contract
         run: python scripts/test_100_improvements_contract.py
 
+      - name: Verify Workshop camera integration
+        run: python scripts/verify_workshop_camera_port.py
+
   luau-syntax:
     name: Compile and test Luau
     runs-on: ubuntu-latest
