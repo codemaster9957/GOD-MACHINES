@@ -32,16 +32,6 @@ local function targetNodeData(attachment)
 	}
 end
 
-local function selectedSourceNodes()
-	local ghost = workspace:FindFirstChild("GodMachinesBuildGhost")
-	if not ghost or not ghost:IsA("Model") then return nil end
-	local partType = ghost:GetAttribute("PartType")
-	if type(partType) ~= "string" or partType == "" then return nil end
-	local definition = PartCatalog.Get(partType)
-	if not definition then return nil end
-	return BuildMath.AttachmentNodes(definition, ghost:GetAttribute("MirrorX") == true)
-end
-
 function NodeVisualizer.new()
 	local self = setmetatable({}, NodeVisualizer)
 	self.Enabled = true
@@ -51,6 +41,8 @@ function NodeVisualizer.new()
 	-- Keep markers independent of camera replacement/reset events.
 	self.Folder.Parent = workspace
 	self._markers = {}
+	self._sourceNodeCacheKey = nil
+	self._sourceNodes = nil
 	return self
 end
 
@@ -79,6 +71,33 @@ local function findModel(mechId)
 	return if model and model:IsA("Model") then model else nil
 end
 
+function NodeVisualizer:_selectedSourceNodes()
+	local ghost = workspace:FindFirstChild("GodMachinesBuildGhost")
+	if not ghost or not ghost:IsA("Model") then
+		self._sourceNodeCacheKey = nil
+		self._sourceNodes = nil
+		return nil
+	end
+	local partType = ghost:GetAttribute("PartType")
+	if type(partType) ~= "string" or partType == "" then
+		self._sourceNodeCacheKey = nil
+		self._sourceNodes = nil
+		return nil
+	end
+	local mirrored = ghost:GetAttribute("MirrorX") == true
+	local cacheKey = partType .. ":" .. tostring(mirrored)
+	if self._sourceNodeCacheKey == cacheKey and self._sourceNodes then return self._sourceNodes end
+	local definition = PartCatalog.Get(partType)
+	if not definition then
+		self._sourceNodeCacheKey = nil
+		self._sourceNodes = nil
+		return nil
+	end
+	self._sourceNodeCacheKey = cacheKey
+	self._sourceNodes = BuildMath.AttachmentNodes(definition, mirrored)
+	return self._sourceNodes
+end
+
 function NodeVisualizer:_makeMarker(attachment)
 	local marker = Instance.new("Part")
 	marker.Name = "BuildNodeMarker"
@@ -101,7 +120,7 @@ function NodeVisualizer:Update()
 	local model = findModel(self.MechId)
 	if not model then self:Clear(); return end
 
-	local sourceNodes = selectedSourceNodes()
+	local sourceNodes = self:_selectedSourceNodes()
 	local live = {}
 	for _, descendant in ipairs(model:GetDescendants()) do
 		if descendant:IsA("Attachment") and descendant:GetAttribute("BuildNode") == true then
@@ -140,6 +159,8 @@ end
 
 function NodeVisualizer:Destroy()
 	self:Clear()
+	self._sourceNodeCacheKey = nil
+	self._sourceNodes = nil
 	if self.Folder then self.Folder:Destroy() end
 end
 
