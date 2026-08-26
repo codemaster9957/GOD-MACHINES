@@ -7,6 +7,7 @@
 
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 --------------------------------------------------
 -- TYPES
@@ -42,6 +43,9 @@ local Projectile: any = {
 function Projectile:Init(container: any)
 	self._damage =
 		container:Get("DamageService")
+
+	self._feedback =
+		ReplicatedStorage.MechFramework.Remotes.Events.CombatFeedback
 end
 
 --------------------------------------------------
@@ -107,6 +111,15 @@ function Projectile:_apply(
 	context: any
 )
 
+	self._feedback:FireAllClients({
+		Kind = "Impact",
+		Position = hit.Position,
+		Normal = hit.Normal,
+		Color = if typeof(context.EffectColor) == "Color3" then context.EffectColor else Color3.fromRGB(255, 181, 54),
+		WeaponId = tostring(context.WeaponId or ""),
+		Explosive = (tonumber(config.ExplosionRadius) or 0) > 0,
+	})
+
 	local mechId, componentId =
 		componentFrom(
 			hit.Instance
@@ -138,6 +151,12 @@ function Projectile:_apply(
 
 				Position =
 					hit.Position,
+
+				DamageType =
+					context.DamageType,
+
+				Penetration =
+					context.Penetration,
 			}
 		)
 	end
@@ -245,6 +264,12 @@ function Projectile:_apply(
 
 				Position =
 					hit.Position,
+
+				DamageType =
+					"Explosive",
+
+				Penetration =
+					context.Penetration,
 			}
 		)
 	end
