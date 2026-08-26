@@ -5,6 +5,7 @@
 local Players = game:GetService("Players")
 local ContextActionService = game:GetService("ContextActionService")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local remote = game.ReplicatedStorage.MechFramework.Remotes.Events.RequestControlAction
@@ -94,6 +95,11 @@ player:GetAttributeChangedSignal("BuildMode"):Connect(function()
 	if player:GetAttribute("BuildMode") == true then releaseHeldActions() end
 end)
 player:GetAttributeChangedSignal("ActiveMechId"):Connect(releaseHeldActions)
+player.CharacterRemoving:Connect(releaseHeldActions)
+UserInputService.WindowFocusReleased:Connect(function()
+	-- If Roblox loses focus before key/mouse-up arrives, immediately clear server-held controls.
+	releaseHeldActions()
+end)
 
 for _, binding in ipairs(PHYSICAL_BINDINGS) do
 	local casName = "GM_Control_" .. binding.Name
@@ -121,8 +127,6 @@ for _, binding in ipairs(PHYSICAL_BINDINGS) do
 	)
 end
 
--- Primary/secondary are special: update the held server state as the cursor moves.
--- CanFire remains authoritative, so this cannot bypass weapon fire rates.
 RunService.RenderStepped:Connect(function()
 	local now=os.clock()
 	if now-lastAimRefresh<AIM_REFRESH_RATE then return end
