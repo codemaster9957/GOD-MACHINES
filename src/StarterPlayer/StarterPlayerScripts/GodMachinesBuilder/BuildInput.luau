@@ -41,9 +41,18 @@ function BuildInput.new(UserInputService, callbacks)
 		if input.KeyCode == Enum.KeyCode.F then callbacks.FrameCamera(); return end
 		if input.KeyCode == Enum.KeyCode.V then callbacks.ToggleFreeFly(); return end
 		if input.KeyCode == Enum.KeyCode.Home then callbacks.CameraView("Home"); return end
-		if input.KeyCode == Enum.KeyCode.KeypadOne then callbacks.CameraView("Front"); return end
-		if input.KeyCode == Enum.KeyCode.KeypadThree then callbacks.CameraView("Right"); return end
-		if input.KeyCode == Enum.KeyCode.KeypadSeven then callbacks.CameraView("Top"); return end
+		if input.KeyCode == Enum.KeyCode.KeypadOne then
+			callbacks.CameraView(if shiftDown(UserInputService) then "Rear" else "Front")
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.KeypadThree then
+			callbacks.CameraView(if shiftDown(UserInputService) then "Left" else "Right")
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.KeypadSeven then
+			callbacks.CameraView(if shiftDown(UserInputService) then "Bottom" else "Top")
+			return
+		end
 
 		-- Selection is explicit so ordinary LMB remains the placement tool.
 		if input.KeyCode == Enum.KeyCode.A and controlDown(UserInputService) then callbacks.SelectAll(); return end
