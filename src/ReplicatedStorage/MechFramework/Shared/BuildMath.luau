@@ -19,6 +19,26 @@ function BuildMath.Compatible(a: {[string]: any}, b: {[string]: any}): boolean
 	return has(acceptsA,b.Type) and has(acceptsB,a.Type)
 end
 
+-- Pick the compatible source socket whose local facing most strongly opposes the target socket.
+-- This is intentionally transform-based rather than name-based so mirrored/custom parts keep working.
+function BuildMath.BestCompatibleSource(targetNode: {[string]: any}, sourceNodes: {any}): any?
+	if type(targetNode)~="table" or typeof(targetNode.Transform)~="CFrame" then return nil end
+	local targetFacing=(targetNode.Transform :: CFrame).LookVector
+	local best=nil
+	local bestScore=-math.huge
+	for _,source in ipairs(sourceNodes or {}) do
+		if type(source)=="table" and type(source.Name)=="string" and typeof(source.Transform)=="CFrame" and BuildMath.Compatible(targetNode,source) then
+			local score=-targetFacing:Dot((source.Transform :: CFrame).LookVector)
+			local tie=math.abs(score-bestScore)<=1e-6
+			if best==nil or score>bestScore+1e-6 or (tie and source.Name<tostring(best.Name)) then
+				best=source
+				bestScore=score
+			end
+		end
+	end
+	return best
+end
+
 -- Reflect a local rigid transform across its X plane while returning a valid right-handed CFrame.
 -- For rotation R this is M*R*M, M=diag(-1,1,1); translation is M*p.
 function BuildMath.MirrorX(transform: CFrame): CFrame
