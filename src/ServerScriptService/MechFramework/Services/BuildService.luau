@@ -165,47 +165,63 @@ function Build:_place(player,request,appearance)
 	local paint=definition.PaintDefaults or {}; if type(appearance)=="table" and type(appearance.Paint)=="table" then paint=appearance.Paint end
 	local mechId=request.MechId
 	if mechId~=nil and type(mechId)~="string" then return false,"BadMechId" end
-	if not mechId then mechId=self._mechs:Create(userId,{BuildOrigin=true}) end
-	if not mechId or not self._mechs:IsOwner(userId,mechId) then return false,"NotAuthorized" end
-	local mech=self._mechs:Get(mechId); if not mech then return false,"InvalidMech" end
-	local model=self:_model(mechId); if model:GetAttribute("EditMode")==false then return false,"EnterEditModeFirst" end
+	local createdMech=false
+	if not mechId then mechId=self._mechs:Create(userId,{BuildOrigin=true}); createdMech=true end
+	local function reject(reason)
+		if createdMech and type(mechId)=="string" then
+			local current=self._mechs:Get(mechId)
+			if current and next(current.Components or {})==nil then
+				self:_destroyRealized(mechId)
+				self._mechs:Destroy(mechId)
+				self._physics:MarkDirty(mechId)
+			end
+		end
+		return false,reason
+	end
+	if not mechId or not self._mechs:IsOwner(userId,mechId) then return reject("NotAuthorized") end
+	local mech=self._mechs:Get(mechId); if not mech then return reject("InvalidMech") end
+	local model=self:_model(mechId); if model:GetAttribute("EditMode")==false then return reject("EnterEditModeFirst") end
 
 	local transform=request.Transform; local target,targetNode,sourceNode=nil,nil,nil
+	local sourceNodeName=if type(request.SourceNode)=="string" then request.SourceNode else nil
 	if request.TargetComponentId then
-		if type(request.TargetComponentId)~="string" or type(request.TargetNode)~="string" or type(request.SourceNode)~="string" then return false,"BadNodeRequest" end
-		target=mech.Components[request.TargetComponentId]; if not target then return false,"InvalidTarget" end
-		targetNode=nodeMap(target)[request.TargetNode]; sourceNode=BuildMath.Nodes(definition,mirrorX)[request.SourceNode]
-		if not targetNode or not sourceNode then return false,"InvalidNode" end
-		if targetNode.OccupiedBy then return false,"NodeOccupied" end
-		if not BuildMath.Compatible(targetNode,sourceNode) then return false,"IncompatibleNode" end
+		if type(request.TargetComponentId)~="string" or type(request.TargetNode)~="string" then return reject("BadNodeRequest") end
+		target=mech.Components[request.TargetComponentId]; if not target then return reject("InvalidTarget") end
+		targetNode=nodeMap(target)[request.TargetNode]
+		if not targetNode then return reject("InvalidNode") end
+		if targetNode.OccupiedBy then return reject("NodeOccupied") end
+		local sourceNodes=BuildMath.AttachmentNodes(definition,mirrorX)
+		sourceNode=BuildMath.BestCompatibleSource(targetNode,sourceNodes)
+		if not sourceNode then return reject("IncompatibleNode") end
+		sourceNodeName=sourceNode.Name
 		transform=BuildMath.Snap(target.LocalTransform,targetNode.Transform,sourceNode.Transform,tonumber(request.Rotation) or 0)
-	elseif next(mech.Components or {})~=nil then return false,"AttachmentRequired" end
+	elseif next(mech.Components or {})~=nil then return reject("AttachmentRequired") end
 
-	if typeof(transform)~="CFrame" then return false,"InvalidTransform" end
-	if not self:_clearance(definition,transform) then return false,"Collision" end
+	if typeof(transform)~="CFrame" then return reject("InvalidTransform") end
+	if not self:_clearance(definition,transform) then return reject("Collision") end
 	local before=self:_snapshot(mechId,userId)
 	local consumed,receipt=self._inventory:ConsumeOne(userId,partType)
-	if not consumed then return false,receipt or "InsufficientInventory" end
-	if conditionRatioFromReceipt(receipt)<=0 then self:_restoreReceipt(userId,receipt,partType); return false,"PartNeedsRepair" end
+	if not consumed then return reject(receipt or "InsufficientInventory") end
+	if conditionRatioFromReceipt(receipt)<=0 then self:_restoreReceipt(userId,receipt,partType); return reject("PartNeedsRepair") end
 
 	local nodes=BuildMath.AttachmentNodes(definition,mirrorX); for _,node in pairs(nodes) do node.OccupiedBy=nil end
 	local added,componentId=self._mechs:AddComponent(mechId,userId,partType,transform,{
 		AttachmentNodes=nodes,Paint=clone(paint),MirrorX=mirrorX,InventoryReceipt=clone(receipt),
 	})
-	if not added then self:_restoreReceipt(userId,receipt,partType); return false,componentId end
+	if not added then self:_restoreReceipt(userId,receipt,partType); return reject(componentId) end
 	local component=mech.Components[componentId]; if component then applyReceiptCondition(component,receipt) end
 
 	if target then
-		local actualTargetNode=nodeMap(target)[request.TargetNode]; local actualSourceNode=component and nodeMap(component)[request.SourceNode] or nil
-		if not component or not actualTargetNode or not actualSourceNode or component.Destroyed then self:_rollbackAdded(mech,componentId,userId,partType,receipt); return false,"InvalidNodeState" end
+		local actualTargetNode=nodeMap(target)[request.TargetNode]; local actualSourceNode=component and sourceNodeName and nodeMap(component)[sourceNodeName] or nil
+		if not component or not actualTargetNode or not actualSourceNode or component.Destroyed then self:_rollbackAdded(mech,componentId,userId,partType,receipt); return reject("InvalidNodeState") end
 		actualTargetNode.OccupiedBy=componentId; actualSourceNode.OccupiedBy=target.Id
 		local targetStrength=target.PhysicalProperties and target.PhysicalProperties.StructuralStrength or 100
 		local sourceStrength=component.PhysicalProperties and component.PhysicalProperties.StructuralStrength or 100
-		local attached,edge=self._connections:Attach(mechId,userId,target.Id,componentId,{SocketA=request.TargetNode,SocketB=request.SourceNode,StructuralStrength=math.min(targetStrength,sourceStrength)})
-		if not attached then actualTargetNode.OccupiedBy=nil; actualSourceNode.OccupiedBy=nil; self:_rollbackAdded(mech,componentId,userId,partType,receipt); return false,edge end
+		local attached,edge=self._connections:Attach(mechId,userId,target.Id,componentId,{SocketA=request.TargetNode,SocketB=sourceNodeName,StructuralStrength=math.min(targetStrength,sourceStrength)})
+		if not attached then actualTargetNode.OccupiedBy=nil; actualSourceNode.OccupiedBy=nil; self:_rollbackAdded(mech,componentId,userId,partType,receipt); return reject(edge) end
 	end
 	self:_record(userId,mechId,before); self:_realize(mechId)
-	return true,{MechId=mechId,ComponentId=componentId,Revision=mech.Revision,MirrorX=mirrorX,Paint=clone(paint)}
+	return true,{MechId=mechId,ComponentId=componentId,Revision=mech.Revision,MirrorX=mirrorX,Paint=clone(paint),SourceNode=sourceNodeName}
 end
 
 function Build:_remove(player,request)
