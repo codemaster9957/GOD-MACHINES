@@ -321,8 +321,11 @@ function WorkshopCamera:FocusComponent(instance)
 	local cf, size = self:_bounds(chosen)
 	if not cf or not size then return false end
 	self:_beginTransition()
-	self.FreeFly = false
 	self:_setFocusFromBounds(cf, size)
+	if self.FreeFly then
+		local look = lookFromAngles(self.Yaw, self.Pitch)
+		self.FreePosition = self.FocusPosition - look * self.Distance
+	end
 	return true
 end
 
